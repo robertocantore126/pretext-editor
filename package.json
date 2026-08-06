@@ -9,10 +9,20 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@chenglou/pretext": "^0.0.8"
+    "@chenglou/pretext": "^0.0.8",
+    "jspdf": "^4.2.1"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
-    "vite": "^5.4.10"
+    "vite": "^5.4.10",
+    "puppeteer": "^21.3.8"
+  },
+  "bin": {},
+  "exports": {},
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "html-to-pdf": "node scripts/export-pdf.js"
   }
 }
