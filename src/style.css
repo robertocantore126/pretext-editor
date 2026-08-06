@@ -1,0 +1,170 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg: #f0e6ff;
+  --card: #faf6ee;
+  --ink: #2a2420;
+  --accent: #7c3aed;
+  --accent-soft: #ede4ff;
+  --danger: #d64545;
+  --border: #e2d8c3;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Georgia", "Iowan Old Style", "Palatino Linotype", serif;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 16px 80px;
+}
+
+.toolbar {
+  width: 100%;
+  max-width: 860px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.toolbar h1 {
+  font-family: "Georgia", serif;
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+  flex: 1;
+  color: #4a3f7a;
+}
+
+.toolbar button {
+  border: 1px solid var(--border);
+  background: white;
+  color: var(--ink);
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.toolbar button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.toolbar .hint {
+  font-size: 12px;
+  color: #6b6b6b;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  max-width: 860px;
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.doc-wrap {
+  width: 100%;
+  max-width: 860px;
+  background: var(--card);
+  border-radius: 4px;
+  box-shadow: 0 12px 30px rgba(60, 30, 90, 0.18);
+  position: relative;
+  overflow: hidden;
+  cursor: text;
+}
+
+.doc-canvas {
+  display: block;
+  width: 100%;
+}
+
+.img-handle {
+  position: absolute;
+  border: 2px solid transparent;
+  cursor: grab;
+  touch-action: none;
+}
+
+.img-handle.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.img-handle:active {
+  cursor: grabbing;
+}
+
+.img-handle .resize-grip {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid white;
+  cursor: nwse-resize;
+  display: none;
+}
+
+.img-handle.selected .resize-grip {
+  display: block;
+}
+
+.img-handle .delete-btn {
+  position: absolute;
+  right: -10px;
+  top: -10px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: white;
+  border: 2px solid white;
+  font-size: 12px;
+  line-height: 1;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.img-handle.selected .delete-btn {
+  display: flex;
+}
+
+.dropzone-active {
+  outline: 3px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.caret-input {
+  position: absolute;
+  opacity: 0;
+  width: 1em;
+  height: 1em;
+  border: none;
+  padding: 0;
+  overflow: hidden;
+  resize: none;
+  z-index: 2;
+  background: transparent;
+}
+
+.empty-hint {
+  position: absolute;
+  pointer-events: none;
+  color: #b3a892;
+  font-style: italic;
+}
