@@ -279,3 +279,80 @@ Live confirmation was attempted for H1/C2 against the running dev server, but th
 bridge serves duplicate module instances after HMR (`ops.doc !== import('/src/state/doc.ts').doc`),
 so model-state assertions through dynamic imports are unreliable in this environment; the
 reported items are traced from code with exact line references instead.
+
+---
+
+## What changed — docs/FIXPLAN.md (fixes 1–3)
+
+Fixes 1 and 2 are **regressions** introduced by the rich-inline migration in `00bc71f`
+(before it, the `@chenglou/pretext` call threw into an empty catch and the hand-rolled
+greedy fitter did 100% of layout — every assumption the surrounding code carries was made
+while that integration did nothing). Fix 3 is pre-existing. The lesson is the same: turning
+on an integration that never ran invalidates every assumption built while it did nothing.
+
+### Fix 1 (CRITICAL) — fragment offsets are in pretext's text space, not the document's
+
+The layout mapped fragments back onto the document by accumulating fragment lengths
+(`consumedInItem`), which is only correct while fragment text is a verbatim slice of the
+document. pretext normalizes: it collapses runs of collapsible whitespace to one and trims
+line edges. Typing `"Ciao  mondo  con  spazi  doppi"` (30 chars) emitted one 26-char line
+whose last 4 document characters belonged to no line: the caret stopped at offset 26,
+`pixelToCursor` could not reach the end, style runs and the HTML/PDF exports sliced the
+wrong glyphs, and `<pre>` blocks violated RICH-TEXT-MODEL.md §8's verbatim promise.
+
+Fixed with an alignment walk (`alignFragment` in `layout/paragraph.ts`) that encodes
+pretext's normalization exactly, one monotonic `searchPos` over the paragraph instead of
+per-item counters, and — the load-bearing part — `line.text` is now **the document slice**
+(`text.slice(a.start, a.end)`), so every consumer that slices by document offsets is
+correct again without a change: caret, selection, measure, both exporters. `line.width` is
+the painted width of that slice (run prefix sums), so a following fragment on the same
+line does not overlap the extra spaces. On disagreement (a hyphen at a break, a future
+normalization rule) the layout warns once per paragraph and falls back to arithmetic
+offsets — a wrong offset is loud, never silent.
+
+Residual: a line containing a collapsed run is painted a few pixels wider than pretext
+broke it. The clean retirement landed as the fix-1 follow-up: `expandCollapsibleSpaces`
+(`edit/ops.ts`) turns a typed — or plain-pasted, as browsers do in contenteditable —
+space that would sit directly after a collapsible space into U+00A0. pretext preserves
+space+NBSP pairs verbatim (verified: codes `32,160` in source and fragment alike), so
+collapsible runs no longer enter the model through the input paths and the bleed
+disappears. The same expansion at `<pre>` import time (making §8's verbatim promise
+layout-exact too) remains a separate decision. Fix 1 stays as the defence for anything
+that reaches the model regardless.
+
+### Fix 2 (HIGH) — whitespace-only paragraphs spun ~1.7M iterations
+
+`while (pos < text.length)` advanced `pos` only from fragments pretext actually emitted; a
+paragraph of only whitespace never emits one, and both escape hatches missed it (the
+`cursor.itemIndex` test could not fire because no range ever returned a cursor; the 1e7
+guard was a 1.7M-iteration freeze). Measured: one space → 177 ms per layout, Enter with a
+spacer paragraph → 105–170 ms stalls on every paragraph break (worse after the H1 fix
+made every Enter a full dirty pass).
+
+Fixed three ways in `layoutParagraph`: an early return when no item has layable content
+(emits the single empty line the empty-text branch emits); termination driven by a probe
+at the widest region (`layoutNextRichInlineLineRange` at `regionRight - leftIndent`
+returning null ⇒ the flow is exhausted — one extra call per obstructed band); and the
+runaway guard bounded by the obstruction bottom (`max(im.y + im.h)` over loaded images +
+one `lineH`) instead of 1e7.
+
+### Fix 3 (MEDIUM) — a tainted canvas silently dropped the silhouette
+
+`buildAlphaMapForImage` swallowed `getImageData`'s `SecurityError`, so a cross-origin image
+without CORS (which the C1 fix deliberately keeps *displaying* via the direct-URL fallback)
+silently degraded the wrap to a bounding box. Now the catch sets `silhouetteUnavailable` on
+the record, `console.warn`s once per image (taint distinguished from genuine bugs, which
+stay loud), sets the wrapper tooltip, and marks the handle with a `no-silhouette` class
+(dashed red border in `style.css`). The blob path already covers every host that permits
+CORS; setting `crossOrigin = 'anonymous'` on the fallback is explicitly rejected — on a
+host with no CORS headers it makes the image fail to load outright, strictly worse.
+
+### Also landed
+
+- The offset invariant (FIXPLAN.md §0) is asserted inside `layoutParagraph` behind
+  `import.meta.env.DEV` — a regression is loud on the next dev run, not silent. Required
+  adding the standard `src/vite-env.d.ts` (`vite/client` reference) so `import.meta.env`
+  typechecks.
+- Acceptance: the three FIXPLAN.md snippets pass on a fresh load (offset coverage 30/30,
+  caret reaches the end, whitespace-only layout ~0 ms, single-digit Enter samples, taint
+  simulation warns + flags), and VERIFY.md §1 (both-sides wrap) still passes.

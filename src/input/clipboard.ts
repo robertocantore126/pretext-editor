@@ -9,6 +9,7 @@
 // to the existing handler in input/keyboard.ts.
 
 import { repositionGhostInput } from '../edit/caret'
+import { expandCollapsibleSpaces } from '../edit/ops'
 import { recordEdit } from '../edit/history'
 import { importHTML } from './html-import'
 import { relayout } from '../layout/engine'
@@ -58,7 +59,15 @@ function insertAtCursor(insertText: string, insertIds?: Uint16Array[]) {
   const para = spec?.para ?? doc.cursor.para
   const offset = spec?.offset ?? doc.cursor.offset
   const deleteCount = spec?.deleteCount ?? 0
-  recordEdit(applyEdit(para, offset, deleteCount, normalized, insertIds))
+  // Styled (internal-MIME) paste round-trips the model verbatim: its ids are
+  // per-character, so the text must not be transformed. Plain text is the same
+  // input boundary as typing — a collapsible space next to a collapsible space
+  // becomes U+00A0, as browsers do in contenteditable (FIXPLAN.md fix-1
+  // follow-up).
+  const text = insertIds
+    ? normalized
+    : expandCollapsibleSpaces(normalized, offset > 0 ? doc.paragraphs[para][offset - 1] : '')
+  recordEdit(applyEdit(para, offset, deleteCount, text, insertIds))
   relayout()
   repositionGhostInput()
 }

@@ -294,8 +294,29 @@ export function buildAlphaMapForImage(rec: FloatImage, sampleFactor = 3) {
       rowSpans[r * 2 + 1] = rowMax
     }
     rec.alphaMap = { w: dw, h: dh, data, rowSpans, scale: sampleFactor }
+    // A later successful build clears the failure signal (e.g. after a resize
+    // once the source is same-origin).
+    if (rec.silhouetteUnavailable) {
+      rec.silhouetteUnavailable = false
+      rec.wrapper.classList.remove('no-silhouette')
+      rec.wrapper.removeAttribute('title')
+    }
   } catch (err) {
-    // ignore
+    // Do not swallow (FIXPLAN.md fix 3): a cross-origin image without CORS
+    // headers taints the canvas and getImageData throws SecurityError, silently
+    // degrading the wrap from silhouette to bounding box with no signal at all.
+    // A genuine programming error must stay loud too — it is only taint that
+    // gets the user-facing explanation.
+    rec.alphaMap = undefined
+    if (!rec.silhouetteUnavailable) {
+      rec.silhouetteUnavailable = true
+      const tainted = err instanceof DOMException && err.name === 'SecurityError'
+      console.warn(
+        `[images] ${rec.id}: ${tainted ? 'immagine remota senza CORS' : 'buildAlphaMapForImage: ' + (err instanceof Error ? err.message : String(err))} — il testo scorre attorno al rettangolo, non alla sagoma`
+      )
+      rec.wrapper.title = 'Immagine remota senza CORS: il testo scorre attorno al rettangolo, non alla sagoma'
+      rec.wrapper.classList.add('no-silhouette')
+    }
   }
 }
 

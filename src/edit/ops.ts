@@ -18,11 +18,44 @@ function editPos(): { para: number; offset: number; deleteCount: number } {
   return { para: doc.cursor.para, offset: doc.cursor.offset, deleteCount: 0 }
 }
 
+const COLLAPSIBLE_WS = /[ \t]/
+
+/**
+ * FIXPLAN.md fix-1 follow-up — browsers' contenteditable rule: when a typed (or
+ * plain-pasted) space would sit directly after a collapsible space, insert
+ * U+00A0 instead, so two collapsible characters are never adjacent in the
+ * model. pretext preserves space+NBSP pairs verbatim (verified: source and
+ * fragment character codes both 32,160,…), which retires the fix-1 residual —
+ * a line containing a collapsed run is painted a few pixels wider than the
+ * width pretext broke it at.
+ *
+ * `prevChar` is the character before the insertion point. Each '\n' starts a
+ * fresh paragraph segment whose first character has no predecessor (a space at
+ * the start of a paragraph is a normal space).
+ */
+export function expandCollapsibleSpaces(text: string, prevChar: string): string {
+  if (!text.includes(' ') && !text.includes('\t')) return text
+  let out = ''
+  let prev = prevChar
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\n') {
+      out += ch
+      prev = ''
+    } else {
+      out += COLLAPSIBLE_WS.test(ch) && COLLAPSIBLE_WS.test(prev) ? '\u00A0' : ch
+      prev = ch
+    }
+  }
+  return out
+}
+
 export function insertTextAtCursor(str: string) {
   if (str.length === 0) return
   const normalized = str.replace(/\r\n/g, '\n')
   const pos = editPos()
-  recordEdit(applyEdit(pos.para, pos.offset, pos.deleteCount, normalized))
+  const text = expandCollapsibleSpaces(normalized, pos.offset > 0 ? doc.paragraphs[pos.para][pos.offset - 1] : '')
+  recordEdit(applyEdit(pos.para, pos.offset, pos.deleteCount, text))
   relayout()
 }
 

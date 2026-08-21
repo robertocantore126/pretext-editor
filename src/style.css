@@ -134,6 +134,12 @@ html, body {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Silhouette unavailable (FIXPLAN.md fix 3): canvas tainted by a no-CORS
+   remote image — text wraps the rectangle, and the handle says so. */
+.img-handle.no-silhouette {
+  border-color: rgba(214, 69, 69, 0.55);
+}
+
 .img-handle:active {
   cursor: grabbing;
 }

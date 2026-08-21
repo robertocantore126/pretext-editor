@@ -19,6 +19,13 @@ export interface FloatImage {
     rowSpans: Int16Array
     scale: number
   }
+  /**
+   * True when the silhouette could not be sampled (canvas tainted by a
+   * cross-origin image without CORS): the wrap falls back to the bounding box
+   * and the handle is marked + tooltipped instead of degrading silently
+   * (FIXPLAN.md fix 3).
+   */
+  silhouetteUnavailable?: boolean
 }
 
 export interface LineInfo {
