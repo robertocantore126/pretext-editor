@@ -7,7 +7,7 @@
 // the interned-id array. Consecutive typed characters coalesce into a single entry.
 
 import { relayout } from '../layout/engine'
-import { applyEdit, subscribeReset } from '../model/document'
+import { applyEdit, notifyChanged, subscribeReset } from '../model/document'
 import type { EditRecord } from '../model/document'
 import { markParagraphDirty } from '../model/dirty'
 import { doc } from '../state/doc'
@@ -126,6 +126,9 @@ function applyEntry(entry: HistoryEntry, direction: 'undo' | 'redo'): void {
       doc.styleIds[e.para] = (direction === 'undo' ? e.before : e.after).slice()
       markParagraphDirty(e.para)
     }
+    // Style undo/redo mutates ids directly; the autosave must still see it
+    // (BUGHUNT C2).
+    notifyChanged()
   } else {
     const edit = direction === 'undo' ? entry.inverse : entry.forward
     applyEdit(edit.paraIndex, edit.offset, edit.deleteCount, edit.insertText, edit.insertIds)

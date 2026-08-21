@@ -1,6 +1,7 @@
 import { docWrap, ghostInput } from '../dom'
 import { caretPixelPosition } from '../layout/caret-position'
 import { relayout, scheduleRelayout } from '../layout/engine'
+import { notifyChanged } from '../model/document'
 import { draw } from '../render/draw'
 import { view } from '../state/view'
 import type { FloatImage } from '../types'
@@ -16,14 +17,29 @@ type Placement =
   /** Size from the natural dimensions, position from the drop point or the caret. */
   | { kind: 'auto'; dropX?: number; dropY?: number }
 
-export function convertImageToDataURL(img: HTMLImageElement): Promise<string> {
+/**
+ * Serializes an image to a data URL, or null when it cannot be serialized:
+ * a cross-origin image without CORS taints the canvas (toDataURL throws), and
+ * an image that never loaded has nothing to draw. Callers must skip nulls so
+ * one bad image cannot veto a whole autosave or export (BUGHUNT C1/M7).
+ */
+export function convertImageToDataURL(img: HTMLImageElement): Promise<string | null> {
   return new Promise((resolve) => {
-    const canvas = document.createElement('canvas')
-    canvas.width = img.naturalWidth
-    canvas.height = img.naturalHeight
-    const ctx2 = canvas.getContext('2d')!
-    ctx2.drawImage(img, 0, 0)
-    resolve(canvas.toDataURL('image/png'))
+    try {
+      if (!img.naturalWidth || !img.naturalHeight) {
+        resolve(null)
+        return
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+      const ctx2 = canvas.getContext('2d')!
+      ctx2.drawImage(img, 0, 0)
+      resolve(canvas.toDataURL('image/png'))
+    } catch {
+      // Tainted canvas (cross-origin image without CORS) or any other failure.
+      resolve(null)
+    }
   })
 }
 
@@ -57,6 +73,7 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
       ? { id, img: imgEl, wrapper, x: placement.x, y: placement.y, w: placement.w, h: placement.h, loaded: false, objectUrl: src }
       : { id, img: imgEl, wrapper, x: 0, y: 0, w: 160, h: 160, loaded: false, objectUrl: src }
   view.images.push(rec)
+  notifyChanged()
 
   imgEl.onload = () => {
     if (placement.kind === 'auto') {
@@ -229,6 +246,7 @@ export function deleteImage(id: string) {
   view.images[idx].wrapper.remove()
   view.images.splice(idx, 1)
   if (view.selectedImageId === id) view.selectedImageId = null
+  notifyChanged()
   relayout()
 }
 
@@ -297,9 +315,19 @@ export function initImageInteractions() {
       rec.w = Math.round(newW)
       rec.h = Math.round(newW / d.aspect)
     }
+    // Geometry changes must reach the autosave (BUGHUNT H2); the debounce
+    // collapses the per-frame spam into one save after the drag settles.
+    notifyChanged()
     scheduleRelayout()
   })
   window.addEventListener('mouseup', () => {
+    const d = view.dragging
+    if (d && d.mode === 'resize') {
+      // The silhouette is sampled once at load; rebuild it for the new box so
+      // the wrap follows the resized shape (BUGHUNT M11).
+      const rec = view.images.find((i) => i.id === d.id)
+      if (rec) buildAlphaMapForImage(rec)
+    }
     view.dragging = null
   })
 

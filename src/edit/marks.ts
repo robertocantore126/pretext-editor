@@ -15,9 +15,9 @@ export function applySelectionMark(kind: 'bold' | 'italic' | 'underline'): void 
 }
 
 export function toggleHeadlineForPara(): void {
-  const edit = toggleHeadline()
-  if (edit) {
-    recordStyleEdit([edit])
+  const edits = toggleHeadline()
+  if (edits.length > 0) {
+    recordStyleEdit(edits)
     relayout()
   }
 }

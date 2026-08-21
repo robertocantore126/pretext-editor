@@ -48,6 +48,20 @@ function firstVisibleIndex(scrollTop: number): number {
   return lo
 }
 
+/** Inter-word gaps of a fragment: whitespace runs followed by a non-space char. */
+function countInteriorGaps(text: string): number {
+  let count = 0
+  let inWs = false
+  for (let i = 0; i < text.length; i++) {
+    if (/[ \t\n\f\r]/.test(text[i])) inWs = true
+    else if (inWs) {
+      count++
+      inWs = false
+    }
+  }
+  return count
+}
+
 export function draw() {
   const cssWidth = parseFloat(canvas.style.width) || docWrap.clientWidth
   const cssHeight = parseFloat(canvas.style.height) || docWrap.clientHeight
@@ -103,8 +117,14 @@ export function draw() {
       if (e <= s) continue
       const leftPart = line.text.slice(0, s - line.startOffset)
       const midPart = line.text.slice(s - line.startOffset, e - line.startOffset)
-      const segLeft = PAD_X + line.x + measureTextWidthOnPara(line.paraIndex, leftPart, line.startOffset)
-      const segWidth = measureTextWidthOnPara(line.paraIndex, midPart, s)
+      // BUGHUNT M10: on justified lines the words are spread, so the selection
+      // rect must grow by the same per-gap slack as the paint.
+      const jGap = line.justifyGap && line.justifyGap > 0 ? line.justifyGap : 0
+      const segLeft =
+        PAD_X + line.x + (line.justifyOffset || 0) +
+        measureTextWidthOnPara(line.paraIndex, leftPart, line.startOffset) +
+        (jGap ? countInteriorGaps(leftPart) * jGap : 0)
+      const segWidth = measureTextWidthOnPara(line.paraIndex, midPart, s) + (jGap ? countInteriorGaps(midPart) * jGap : 0)
       const top = PAD_Y + docToVisualY(line.yTop)
       ctx.fillStyle = 'rgba(124,58,237,0.12)'
       ctx.fillRect(segLeft, top + 4, segWidth, (line.height || LINE_HEIGHT) - 8)
@@ -142,9 +162,12 @@ export function draw() {
       const baselineY = lineTopY + fontSize * 0.92 + baselineShift
       if (line.justifyGap && line.justifyGap > 0) {
         const parts = segText.split(/([ \t\n\f\r]+)/).filter((p) => p !== '')
+        const ls = style.letterSpacing || 0
         for (let k = 0; k < parts.length; k++) {
           const part = parts[k]
-          const pw = measureCtx.measureText(part).width
+          // Letter spacing is per character; the very last char of the run has
+          // none, matching the layout's measurement (BUGHUNT M3).
+          const pw = measureCtx.measureText(part).width + (part.length - (k === parts.length - 1 ? 1 : 0)) * ls
           if (style.background) {
             ctx.fillStyle = style.background
             ctx.fillRect(xPos, lineTopY + 2, pw, (line.height || LINE_HEIGHT) - 5)
@@ -157,7 +180,9 @@ export function draw() {
           if (k + 1 < parts.length && /^[ \t\n\f\r]+$/.test(part)) xPos += line.justifyGap
         }
       } else {
-        const w = measureCtx.measureText(segText).width
+        // BUGHUNT M3: canvas measureText ignores letter-spacing; the layout
+        // (and pretext) widens every char except the last by it.
+        const w = measureCtx.measureText(segText).width + (segText.length - 1) * (style.letterSpacing || 0)
         if (style.background) {
           ctx.fillStyle = style.background
           ctx.fillRect(xPos, lineTopY + 2, w, (line.height || LINE_HEIGHT) - 5)

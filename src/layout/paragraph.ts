@@ -33,9 +33,13 @@ function computeRuns(text: string, paraIndex: number): CharRun[] {
     const style = run
     const seg = text.slice(i, i + runLen)
     measureCtx.font = fontForStyle(style)
+    const ls = style.letterSpacing || 0
     const charWidths: number[] = []
+    // pretext widens every grapheme except the last by letterSpacing
+    // (addInternalLetterSpacing); the measured widths must agree so the caret
+    // and the exporters line up with the breaks (BUGHUNT M3).
     for (let k = 0; k < seg.length; k++) {
-      charWidths.push(measureCtx.measureText(seg[k]).width)
+      charWidths.push(measureCtx.measureText(seg[k]).width + (k < seg.length - 1 ? ls : 0))
     }
     // Prefix sums so a substring's width is prefix[b] - prefix[a] (ARCHITECTURE.md §4.7).
     const prefix = new Float64Array(charWidths.length + 1)

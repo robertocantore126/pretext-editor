@@ -13,7 +13,7 @@ import { repositionGhostInput } from '../edit/caret'
 import { initHistory } from '../edit/history'
 import { markAllDirty } from '../model/dirty'
 import { reinternTable, styleIdsFromBytes } from '../model/styles'
-import { subscribeEdits, subscribeReset } from '../model/document'
+import { subscribeChanged, subscribeReset } from '../model/document'
 import { relayout } from '../layout/engine'
 import { addImageFromDataURL, clearImages, convertImageToDataURL } from '../images/images'
 import { ghostInput } from '../dom'
@@ -65,16 +65,23 @@ function scheduleSave(): void {
 async function saveNow(): Promise<void> {
   saveTimer = undefined
   try {
-    const images = await Promise.all(
-      view.images.map(async (im) => ({
-        x: im.x,
-        y: im.y,
-        w: im.w,
-        h: im.h,
-        type: im.img.src.startsWith('data:') ? im.img.src.split(';')[0].slice(5) : 'image/png',
-        dataUrl: await convertImageToDataURL(im.img),
-      }))
-    )
+    // One image must never veto the whole autosave (BUGHUNT C1): unloaded or
+    // unserializable (tainted cross-origin) images are skipped, not fatal.
+    const images = (await Promise.all(
+      view.images.map(async (im) => {
+        if (!im.loaded) return null
+        const dataUrl = await convertImageToDataURL(im.img)
+        if (dataUrl === null) return null
+        return {
+          x: im.x,
+          y: im.y,
+          w: im.w,
+          h: im.h,
+          type: im.img.src.startsWith('data:') ? im.img.src.split(';')[0].slice(5) : 'image/png',
+          dataUrl,
+        }
+      })
+    )).filter((e): e is NonNullable<typeof e> => e !== null)
     const payload = {
       version: 2,
       paragraphs: doc.paragraphs.slice(),
@@ -198,7 +205,9 @@ async function maybeRestore(): Promise<void> {
 }
 
 export function initPersistence(): void {
-  subscribeEdits(() => {
+  // subscribeChanged, not subscribeEdits: style edits and image mutations are
+  // document changes too and must autosave (BUGHUNT C2/H2).
+  subscribeChanged(() => {
     touchedThisSession = true
     scheduleSave()
   })

@@ -9,6 +9,7 @@
 
 import { defaultStyle, doc } from '../state/doc'
 import { markParagraphDirty } from './dirty'
+import { notifyChanged } from './document'
 import { getSelectionRanges } from './selection'
 import { STYLE_BOLD, STYLE_HEADLINE, STYLE_ITALIC, STYLE_UNDERLINE } from './runs'
 import type { InlineStyle } from '../types/doc'
@@ -115,39 +116,49 @@ export function applySelectionMark(kind: 'bold' | 'italic' | 'underline'): Style
     markParagraphDirty(r.para)
   }
   doc.selection = null
+  notifyChanged()
   return edits
 }
 
-export function toggleHeadlineForPara(): StyleEdit | null {
-  const para = doc.cursor.para
-  const paraLen = doc.paragraphs[para].length
-  let start = 0
-  let end = paraLen
-  if (doc.selection && doc.selection.anchor.para === doc.selection.focus.para) {
-    start = Math.min(doc.selection.anchor.offset, doc.selection.focus.offset)
-    end = Math.max(doc.selection.anchor.offset, doc.selection.focus.offset)
-    if (start === end) {
-      // empty selection -> whole paragraph
-      start = 0
-      end = paraLen
-    }
+/**
+ * Toggles headline on the selection. Multi-paragraph selections apply per
+ * paragraph (BUGHUNT M5: the old code silently fell back to the cursor's
+ * paragraph). With no selection (or a collapsed one) the whole cursor
+ * paragraph is toggled, keeping the legacy button behaviour.
+ */
+export function toggleHeadlineForPara(): StyleEdit[] {
+  let ranges = getSelectionRanges()
+  if (ranges.length === 0) {
+    const paraLen = doc.paragraphs[doc.cursor.para].length
+    if (paraLen === 0) return []
+    ranges = [{ para: doc.cursor.para, start: 0, end: paraLen }]
   }
-  const ids = doc.styleIds[para]
-  const before = ids.slice()
-  let anyHeadline = false
-  for (let i = start; i < end; i++) {
-    if (styleEntry(ids[i]).headline) {
-      anyHeadline = true
-      break
+  const edits: StyleEdit[] = []
+  for (const r of ranges) {
+    const para = r.para
+    const ids = doc.styleIds[para]
+    if (!ids || r.end <= r.start) continue
+    const from = Math.min(r.start, ids.length)
+    const to = Math.min(r.end, ids.length)
+    if (from >= to) continue
+    const before = ids.slice()
+    let anyHeadline = false
+    for (let i = from; i < to; i++) {
+      if (styleEntry(ids[i]).headline) {
+        anyHeadline = true
+        break
+      }
     }
-  }
-  for (let i = start; i < end; i++) {
-    const entry = styleEntry(ids[i])
-    if (anyHeadline ? entry.headline : !entry.headline) {
-      ids[i] = internStyle({ ...entry, headline: !anyHeadline })
+    for (let i = from; i < to; i++) {
+      const entry = styleEntry(ids[i])
+      if (anyHeadline ? entry.headline : !entry.headline) {
+        ids[i] = internStyle({ ...entry, headline: !anyHeadline })
+      }
     }
+    edits.push({ para, before, after: ids.slice() })
+    markParagraphDirty(para)
   }
   doc.selection = null
-  markParagraphDirty(para)
-  return { para, before, after: ids.slice() }
+  notifyChanged()
+  return edits
 }

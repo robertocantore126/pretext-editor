@@ -25,7 +25,15 @@ function countInteriorGaps(text: string): number {
 }
 
 export async function exportHTML() {
-  const imgs = await Promise.all(view.images.map(async (im) => ({ ...im, dataUrl: await convertImageToDataURL(im.img) })))
+  // BUGHUNT C1: unserializable images are skipped, not fatal.
+  const imgs = (await Promise.all(
+    view.images.map(async (im) => {
+      if (!im.loaded) return null
+      const dataUrl = await convertImageToDataURL(im.img)
+      if (dataUrl === null) return null
+      return { ...im, dataUrl }
+    })
+  )).filter((e): e is NonNullable<typeof e> => e !== null)
   const pageCount = Math.max(1, Math.ceil(view.docHeight / PAGE_HEIGHT))
   const pageW = Math.round(view.docWidth + PAD_X * 2)
   const css = `
@@ -59,6 +67,7 @@ export async function exportHTML() {
         const inline: string[] = []
         if (style.color && style.color !== INK) inline.push(`color:${style.color}`)
         if (style.background) inline.push(`background:${style.background}`)
+        if (style.letterSpacing) inline.push(`letter-spacing:${style.letterSpacing}px`)
         if (style.headline) inline.push(`font-size:${Math.round(style.fontSize * 1.6)}px`)
         if (inline.length > 0) segHtml = `<span style="${inline.join(';')}">${segHtml}</span>`
         runs.push(segHtml)

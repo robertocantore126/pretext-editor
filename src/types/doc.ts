@@ -84,5 +84,7 @@ export interface RichSerializedDocument {
   paragraphs: string[]
   styleTable: InlineStyle[]
   styleIds: number[][]
+  /** Paragraph attributes (heading/align/indent/list). Optional: files written before the fix lack it. */
+  blockAttrs?: BlockAttrs[]
   images: SerializedImage[]
 }

@@ -33,21 +33,31 @@ function marksToStyleIds(paragraphs: string[], marks: TextMark[][] | undefined):
 }
 
 export async function exportDocument() {
-  const images = await Promise.all(
-    view.images.map(async (im) => ({
-      x: im.x,
-      y: im.y,
-      w: im.w,
-      h: im.h,
-      type: im.img.src.startsWith('data:') ? im.img.src.split(';')[0].slice(5) : 'image/png',
-      dataUrl: await convertImageToDataURL(im.img),
-    }))
-  )
+  // BUGHUNT C1: unserializable images (tainted cross-origin, not loaded) are
+  // skipped instead of failing the whole export.
+  const images = (await Promise.all(
+    view.images.map(async (im) => {
+      if (!im.loaded) return null
+      const dataUrl = await convertImageToDataURL(im.img)
+      if (dataUrl === null) return null
+      return {
+        x: im.x,
+        y: im.y,
+        w: im.w,
+        h: im.h,
+        type: im.img.src.startsWith('data:') ? im.img.src.split(';')[0].slice(5) : 'image/png',
+        dataUrl,
+      }
+    })
+  )).filter((e): e is NonNullable<typeof e> => e !== null)
   const documentData: RichSerializedDocument = {
     version: 2,
     paragraphs: doc.paragraphs,
     styleTable: doc.styleTable,
     styleIds: doc.styleIds.map((s) => Array.from(s)),
+    // BUGHUNT H3: block attributes are part of the document; they were dropped
+    // before, so heading/align/indent/list formatting died in a JSON round trip.
+    blockAttrs: doc.blockAttrs.map((a) => ({ ...a })),
     images,
   }
   const blob = new Blob([JSON.stringify(documentData, null, 2)], { type: 'application/json' })
@@ -62,7 +72,9 @@ export async function exportDocument() {
 export async function importDocument(json: any) {
   if (!json || typeof json !== 'object' || !Array.isArray(json.paragraphs)) throw new Error('Formato non valido')
   clearImages()
-  doc.paragraphs = json.paragraphs
+  // BUGHUNT M12: coerce every paragraph to a string so a crafted file cannot
+  // push NaN offsets into applyEdit.
+  doc.paragraphs = json.paragraphs.map((p: unknown) => String(p ?? ''))
   if (json.version === 2 && Array.isArray(json.styleIds) && Array.isArray(json.styleTable)) {
     // Re-intern the serialized table so indices and the key map stay in sync.
     const remap = reinternTable(json.styleTable)
@@ -73,7 +85,17 @@ export async function importDocument(json: any) {
       Array.isArray(json.marks) && json.marks.every((para: any) => Array.isArray(para)) ? json.marks : undefined
     )
   }
-  doc.blockAttrs = doc.paragraphs.map(() => defaultBlockAttrs())
+  // Clamp style ids to the text length; a mismatched file must not desync ids.
+  doc.styleIds = doc.styleIds.map((ids, i) => {
+    const len = doc.paragraphs[i].length
+    if (ids.length === len) return ids
+    const out = new Uint16Array(len)
+    for (let k = 0; k < Math.min(len, ids.length); k++) out[k] = ids[k] ?? 0
+    return out
+  })
+  doc.blockAttrs = Array.isArray(json.blockAttrs)
+    ? doc.paragraphs.map((_, i) => ({ ...defaultBlockAttrs(), ...(json.blockAttrs[i] ?? {}) }))
+    : doc.paragraphs.map(() => defaultBlockAttrs())
   doc.cursor = { para: 0, offset: 0 }
   doc.selection = null
   view.selectedImageId = null

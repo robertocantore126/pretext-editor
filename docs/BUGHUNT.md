@@ -9,6 +9,43 @@ establish intended behaviour.
 
 ---
 
+## Status
+
+Fixed in the current `dev` tree (uncommitted at the time of writing):
+
+| ID | Fix |
+| --- | --- |
+| C1 | `convertImageToDataURL` now returns `null` on taint/error and skips unloaded
+  images; autosave and the JSON/HTML/PDF exporters skip null images per-image, so one
+  bad image can no longer veto a whole save/export |
+| C2 | new `subscribeChanged`/`notifyChanged` hook on `model/document.ts`; style edits
+  (`model/styles.ts`), style undo/redo (`edit/history.ts`) and all image mutations
+  (`images.ts`) now trigger the autosave |
+| H1 | `applyEdit` calls `markAllDirty()` whenever an edit crosses a paragraph boundary
+  (or inserts `\n`), not only when the net paragraph count changes — the net-zero
+  split/merge no longer reuses stale cached layout |
+| H2 | image create/move/resize/delete now notify persistence (the drag handler is
+  debounced by the existing 800 ms save timer) |
+| H3 | `RichSerializedDocument` gains `blockAttrs`; the JSON exporter writes them and
+  the importer restores them (older v2 files without the field degrade to defaults) |
+| M3 | letter-spacing is now part of the measured char widths (`layout/paragraph.ts`),
+  the canvas paint (`render/draw.ts`) and the HTML export CSS, so layout, caret and
+  paint agree with pretext's per-grapheme widening |
+| M5 | `toggleHeadlineForPara` handles multi-paragraph selections per range instead of
+  silently falling back to the cursor paragraph |
+| M7 | unloaded images are skipped by serialization instead of saving a blank 0x0 PNG |
+| M10 | the selection rectangle accounts for the justification spread on justified lines |
+| M11 | the silhouette alpha map is rebuilt after a grip resize |
+| M12 | JSON import coerces paragraphs to strings and clamps style-id lengths to the text |
+
+Still open: image undo/redo (images are not in history), RTL (`direction` stored but
+not rendered), IME Enter-to-confirm newline leak (browser-dependent, unverified),
+IndexedDB quota handling for very large images, multi-run justified lines in the PDF
+export, empty-block preservation in the HTML import, and the blockquote indent
+accumulation.
+
+---
+
 ## CRITICAL
 
 ### C1 — Autosave silently dies after a non-CORS remote image is pasted (data loss)

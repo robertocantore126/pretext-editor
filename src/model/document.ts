@@ -89,6 +89,11 @@ export function applyEdit(
   const deletedIds: Uint16Array[] = []
   let cur = p
   let curOff = o
+  // BUGHUNT H1: an edit that crosses a paragraph boundary re-indexes the
+  // paragraphs below it even when the net count is unchanged (a delete spanning
+  // one boundary + an insert with one '\n'); the layout caches are keyed by
+  // index, so only markAllDirty() keeps the tail from rendering stale content.
+  let crossedBoundary = false
   while (remaining > 0 && cur < paras.length) {
     const text = paras[cur]
     const ids = styles[cur]
@@ -104,6 +109,7 @@ export function applyEdit(
     }
     if (cur >= paras.length - 1) break
     // Consume the paragraph boundary: merge the next paragraph into this one.
+    crossedBoundary = true
     deletedText += '\n'
     remaining -= 1
     const curLen = paras[cur].length
@@ -166,7 +172,7 @@ export function applyEdit(
   doc.cursor = { para: p + n - 1, offset: o + parts[n - 1].length }
   clearSelection()
 
-  if (paras.length !== parasBefore) markAllDirty()
+  if (paras.length !== parasBefore || crossedBoundary || insertText.includes('\n')) markAllDirty()
   else markParagraphDirty(p)
 
   const record: EditRecord = {
@@ -227,15 +233,29 @@ export function resetDocument(): void {
 }
 
 // ---- subscribers -----------------------------------------------------------
-// A tiny hook so io/persistence.ts (A5) can autosave without main.ts (frozen)
-// changing and without the model importing upward.
+// Two hooks so io/persistence.ts (A5) can autosave without main.ts (frozen)
+// changing and without the model importing upward. notifyEdits fires only for
+// text mutations through applyEdit; notifyChanged fires for *any* document
+// change (style edits, image geometry, undo/redo of styles) so nothing that
+// affects the saved document escapes persistence (BUGHUNT C2/H2).
 
 type EditListener = (record: EditRecord) => void
 const editListeners: EditListener[] = []
+const changedListeners: Array<() => void> = []
 const resetListeners: Array<() => void> = []
 
 export function subscribeEdits(listener: EditListener): void {
   editListeners.push(listener)
+}
+
+/** Fired on every document change: text edits, style edits, image mutations. */
+export function subscribeChanged(listener: () => void): void {
+  changedListeners.push(listener)
+}
+
+/** Signal that the document changed in a way persistence must capture. */
+export function notifyChanged(): void {
+  for (const listener of changedListeners) listener()
 }
 
 export function subscribeReset(listener: () => void): void {
@@ -244,6 +264,7 @@ export function subscribeReset(listener: () => void): void {
 
 function notifyEdits(record: EditRecord): void {
   for (const listener of editListeners) listener(record)
+  notifyChanged()
 }
 
 function notifyReset(): void {
