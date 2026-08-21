@@ -1,14 +1,13 @@
 import { prepareRichInline, layoutNextRichInlineLineRange, materializeRichInlineLineRange } from '@chenglou/pretext/rich-inline'
 import type { RichInlineCursor, RichInlineItem } from '@chenglou/pretext/rich-inline'
 import {
-  FONT_FAMILY,
   FONT_SIZE,
   LINE_HEIGHT,
   MIN_LINE_WIDTH,
   PAGE_HEIGHT,
 } from '../config'
 import { measureCtx } from '../dom'
-import { getStyleRuns, hasHeadlineInRange } from '../model/runs'
+import { fontForStyle, getStyleRuns, hasHeadlineInRange } from '../model/runs'
 import type { LineInfo } from '../types'
 import type { CharRun } from '../types/layout'
 import { runCache } from './cache'
@@ -16,29 +15,20 @@ import { computeLineSlots } from './slots'
 
 // Line breaking: pretext's rich-inline engine (ARCHITECTURE.md §4.1, B2), which
 // replaces the dead prepareWithSegments integration and the greedy fitter. Runs
-// come from the style bytes (Contract 1); the cursor threads across slots so
-// both-sides wrap keeps working. Each fragment becomes its own LineInfo, which
-// is what the renderer, caret and exporters already consume.
+// come from the interned style table (Contract 1); the cursor threads across
+// slots so both-sides wrap keeps working. Each fragment becomes its own
+// LineInfo, which is what the renderer, caret and exporters already consume.
 
 const MAX_LINE_HEIGHT = Math.round(FONT_SIZE * 1.6 * 1.4)
-
-function fontFor(style: { bold: boolean; italic: boolean; underline: boolean; headline: boolean }): string {
-  const fontSize = style.headline ? Math.round(FONT_SIZE * 1.6) : FONT_SIZE
-  const parts: string[] = []
-  if (style.italic) parts.push('italic')
-  if (style.bold) parts.push('700')
-  parts.push(fontSize + 'px')
-  return parts.join(' ') + ' ' + FONT_FAMILY
-}
 
 function computeRuns(text: string, paraIndex: number): CharRun[] {
   const runs: CharRun[] = []
   for (const run of getStyleRuns(paraIndex)) {
     const i = run.start
     const runLen = run.end - run.start
-    const style = { bold: run.bold, italic: run.italic, underline: run.underline, headline: run.headline }
+    const style = run
     const seg = text.slice(i, i + runLen)
-    measureCtx.font = fontFor(style)
+    measureCtx.font = fontForStyle(style)
     const charWidths: number[] = []
     for (let k = 0; k < seg.length; k++) {
       charWidths.push(measureCtx.measureText(seg[k]).width)
@@ -80,7 +70,7 @@ export function layoutParagraph(text: string, docWidth: number, startY: number, 
   const itemMeta: { start: number; trimStart: number; trimmedLen: number }[] = []
   let itemStart = 0
   for (const r of runs) {
-    items.push({ text: r.text, font: fontFor(r.style) })
+    items.push({ text: r.text, font: fontForStyle(r.style), letterSpacing: r.style.letterSpacing || undefined })
     const withoutLeading = r.text.replace(/^[ \t\n\f\r]+/, '')
     const trimmed = withoutLeading.replace(/[ \t\n\f\r]+$/, '')
     itemMeta.push({ start: itemStart, trimStart: r.text.length - withoutLeading.length, trimmedLen: trimmed.length })

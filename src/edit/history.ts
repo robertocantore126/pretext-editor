@@ -3,11 +3,11 @@
 // Every mutation funnels through applyEdit (model/document.ts) and is recorded
 // here by the edit layer (ops.ts, clipboard.ts, marks shim). Text edits are
 // replayed as inverse edits through applyEdit, which keeps dirty tracking and
-// style bytes consistent for free; style edits restore a one-paragraph byte
-// snapshot. Consecutive typed characters coalesce into a single entry.
+// style ids consistent for free; style edits restore a one-paragraph snapshot of
+// the interned-id array. Consecutive typed characters coalesce into a single entry.
 
 import { relayout } from '../layout/engine'
-import { applyEdit } from '../model/document'
+import { applyEdit, subscribeReset } from '../model/document'
 import type { EditRecord } from '../model/document'
 import { markParagraphDirty } from '../model/dirty'
 import { doc } from '../state/doc'
@@ -20,8 +20,8 @@ interface TextEditEntry {
 
 interface StyleSnapshot {
   para: number
-  before: Uint8Array
-  after: Uint8Array
+  before: Uint16Array
+  after: Uint16Array
 }
 
 interface StyleEditEntry {
@@ -39,6 +39,12 @@ export function initHistory(): void {
   redoStack.length = 0
 }
 
+// A "new document" (main.ts reset) invalidates the history of the previous one.
+subscribeReset(() => {
+  undoStack.length = 0
+  redoStack.length = 0
+})
+
 /** Records an edit produced by applyEdit. Callers are the edit-layer entry points. */
 export function recordEdit(record: EditRecord): void {
   // A fresh edit invalidates the redo branch.
@@ -53,21 +59,21 @@ export function recordEdit(record: EditRecord): void {
       offset: f.offset,
       deleteCount: 0,
       insertText: mergedText,
-      // Pure typing never contains '\n', so each insertBytes is a single part;
+      // Pure typing never contains '\n', so each insertIds is a single part;
       // merge into one part of the full length (plain concat would keep two
-      // parts, breaking the constantByte check on the next keystroke).
-      insertBytes: [concatU8(f.insertBytes[0], record.insertBytes[0])],
+      // parts, breaking the constantId check on the next keystroke).
+      insertIds: [concatU16(f.insertIds[0], record.insertIds[0])],
       deletedText: '',
-      deletedBytes: [],
+      deletedIds: [],
     }
     last.inverse = {
       paraIndex: f.paraIndex,
       offset: f.offset,
       deleteCount: mergedText.length,
       insertText: '',
-      insertBytes: [],
+      insertIds: [],
       deletedText: mergedText,
-      deletedBytes: mergedText.split('\n').map(() => new Uint8Array(0)),
+      deletedIds: mergedText.split('\n').map(() => new Uint16Array(0)),
     }
     return
   }
@@ -80,15 +86,15 @@ export function recordEdit(record: EditRecord): void {
       offset: record.offset,
       deleteCount: record.insertText.length,
       insertText: record.deletedText,
-      insertBytes: record.deletedBytes,
+      insertIds: record.deletedIds,
       deletedText: record.insertText,
-      deletedBytes: record.insertBytes,
+      deletedIds: record.insertIds,
     },
   })
 }
 
 /**
- * Records a styles-only change (model/styles.ts), snapshotted by byte array.
+ * Records a styles-only change (model/styles.ts), snapshotted by id array.
  * One formatting action may touch several paragraphs; they share a single undo
  * entry so one Ctrl+Z reverts the whole action.
  */
@@ -117,12 +123,12 @@ export function redo(): boolean {
 function applyEntry(entry: HistoryEntry, direction: 'undo' | 'redo'): void {
   if (entry.kind === 'style') {
     for (const e of entry.edits) {
-      doc.styles[e.para] = (direction === 'undo' ? e.before : e.after).slice()
+      doc.styleIds[e.para] = (direction === 'undo' ? e.before : e.after).slice()
       markParagraphDirty(e.para)
     }
   } else {
     const edit = direction === 'undo' ? entry.inverse : entry.forward
-    applyEdit(edit.paraIndex, edit.offset, edit.deleteCount, edit.insertText, edit.insertBytes)
+    applyEdit(edit.paraIndex, edit.offset, edit.deleteCount, edit.insertText, edit.insertIds)
   }
   relayout()
 }
@@ -135,20 +141,20 @@ function canCoalesce(last: TextEditEntry, record: EditRecord): boolean {
   if (f.insertText.includes('\n') || record.insertText.includes('\n')) return false
   if (f.paraIndex !== record.paraIndex) return false
   if (f.offset + f.insertText.length !== record.offset) return false
-  // Both inserts must carry one constant byte so the merged entry replays identically.
-  const a = constantByte(f.insertBytes)
-  const b = constantByte(record.insertBytes)
+  // Both inserts must carry one constant id so the merged entry replays identically.
+  const a = constantId(f.insertIds)
+  const b = constantId(record.insertIds)
   return a !== null && a === b
 }
 
-function concatU8(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length)
+function concatU16(a: Uint16Array, b: Uint16Array): Uint16Array {
+  const out = new Uint16Array(a.length + b.length)
   out.set(a, 0)
   out.set(b, a.length)
   return out
 }
 
-function constantByte(parts: Uint8Array[]): number | null {
+function constantId(parts: Uint16Array[]): number | null {
   if (parts.length !== 1 || parts[0].length === 0) return null
   const first = parts[0][0]
   for (const b of parts[0]) {

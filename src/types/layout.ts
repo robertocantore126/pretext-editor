@@ -1,5 +1,6 @@
 // Layout and rendering types. Owned by Agent B (see docs/PARALLEL-PLAN.md).
 
+import type { Style } from '../model/runs'
 export interface FloatImage {
   id: string
   img: HTMLImageElement
@@ -37,7 +38,7 @@ export interface CharRun {
   start: number
   end: number
   text: string
-  style: { bold: boolean; italic: boolean; underline: boolean; headline: boolean }
+  style: Style
   charWidths: number[]
   /** prefix[k] = width of the first k chars of this run; width(b..a) = prefix[b] - prefix[a]. */
   prefix: Float64Array

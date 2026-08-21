@@ -1,8 +1,8 @@
-import { FONT_FAMILY, FONT_SIZE, LINE_HEIGHT } from '../config'
+import { LINE_HEIGHT } from '../config'
 import { measureCtx } from '../dom'
 import { measureTextWidthOnPara } from '../measure'
 import { setCursor } from '../model/selection'
-import { styleAt } from '../model/runs'
+import { fontForStyle, styleAt } from '../model/runs'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
 import type { Cursor, LineInfo } from '../types'
@@ -72,12 +72,7 @@ export function pixelToCursor(px: number, py: number): Cursor {
     }
     if (!w) {
       // fallback
-      const fontSize = style.headline ? Math.round(FONT_SIZE * 1.6) : FONT_SIZE
-      const parts: string[] = []
-      if (style.italic) parts.push('italic')
-      if (style.bold) parts.push('700')
-      parts.push(fontSize + 'px')
-      measureCtx.font = parts.join(' ') + ' ' + FONT_FAMILY
+      measureCtx.font = fontForStyle(style)
       w = measureCtx.measureText(text[i]).width
     }
     if (acc + w / 2 > localX) {

@@ -1,8 +1,8 @@
 import { jsPDF } from 'jspdf'
-import { FONT_SIZE, PAD_X, PAD_Y, PAGE_HEIGHT } from '../config'
+import { PAD_X, PAD_Y, PAGE_HEIGHT } from '../config'
 import { convertImageToDataURL } from '../images/images'
 import { measureTextWidthOnPara } from '../measure'
-import { getStyleRunsInRange } from '../model/runs'
+import { getStyleRunsInRange, styleFontSize } from '../model/runs'
 import { view } from '../state/view'
 
 export async function exportPDF() {
@@ -34,7 +34,7 @@ export async function exportPDF() {
         try {
           pdf.setFont(undefined as any, fontStyle as any)
         } catch {}
-        const fontSize = style.headline ? Math.round(FONT_SIZE * 1.6) : FONT_SIZE
+        const fontSize = styleFontSize(style)
         pdf.setFontSize(fontSize)
         const baseline = fontSize * 0.92
         pdf.text(segText, xPos, PAD_Y + (line.yTop - pi * PAGE_HEIGHT) + baseline)

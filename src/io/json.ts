@@ -1,42 +1,19 @@
 import { importInput } from '../dom'
+import { initHistory } from '../edit/history'
 import { addImageFromDataURL, clearImages, convertImageToDataURL } from '../images/images'
 import { markAllDirty } from '../model/dirty'
+import { reinternTable, styleIdsFromBytes } from '../model/styles'
 import { relayout } from '../layout/engine'
 import { STYLE_BOLD, STYLE_HEADLINE, STYLE_ITALIC, STYLE_UNDERLINE } from '../model/runs'
-import { doc } from '../state/doc'
+import { defaultBlockAttrs, doc } from '../state/doc'
 import { view } from '../state/view'
-import type { SerializedDocument, TextMark } from '../types'
+import type { RichSerializedDocument, TextMark } from '../types'
 
-// The on-disk format keeps TextMark[] (offset marks) so previously exported
-// .json files keep importing; the editor itself stores style bytes
-// (ARCHITECTURE.md §4.5) and these helpers convert at the boundary.
+// On-disk format v2 (RICH-TEXT-MODEL.md §4.1): interned style table + per-char
+// ids, so rich formatting round-trips. v1 files (TextMark[] offset marks) still
+// import; the converter below maps the legacy bits onto the table.
 
-function stylesToMarks(paragraphs: string[], styles: Uint8Array[]): TextMark[][] {
-  return paragraphs.map((text, paraIndex) => {
-    const bytes = styles[paraIndex]
-    const marks: TextMark[] = []
-    let i = 0
-    while (i < text.length) {
-      const byte = bytes?.[i] ?? 0
-      if (byte === 0) {
-        i++
-        continue
-      }
-      let j = i + 1
-      while (j < text.length && (bytes?.[j] ?? 0) === byte) j++
-      const mark: TextMark = { start: i, end: j }
-      if (byte & STYLE_BOLD) mark.bold = true
-      if (byte & STYLE_ITALIC) mark.italic = true
-      if (byte & STYLE_UNDERLINE) mark.underline = true
-      if (byte & STYLE_HEADLINE) mark.headline = true
-      marks.push(mark)
-      i = j
-    }
-    return marks
-  })
-}
-
-function marksToStyles(paragraphs: string[], marks: TextMark[][] | undefined): Uint8Array[] {
+function marksToStyleIds(paragraphs: string[], marks: TextMark[][] | undefined): Uint16Array[] {
   return paragraphs.map((text, paraIndex) => {
     const bytes = new Uint8Array(text.length)
     for (const mark of marks?.[paraIndex] ?? []) {
@@ -51,7 +28,7 @@ function marksToStyles(paragraphs: string[], marks: TextMark[][] | undefined): U
       if (bit === 0) continue
       for (let i = start; i < end; i++) bytes[i] = bytes[i] | bit
     }
-    return bytes
+    return styleIdsFromBytes(bytes)
   })
 }
 
@@ -66,9 +43,11 @@ export async function exportDocument() {
       dataUrl: await convertImageToDataURL(im.img),
     }))
   )
-  const documentData: SerializedDocument = {
+  const documentData: RichSerializedDocument = {
+    version: 2,
     paragraphs: doc.paragraphs,
-    marks: stylesToMarks(doc.paragraphs, doc.styles),
+    styleTable: doc.styleTable,
+    styleIds: doc.styleIds.map((s) => Array.from(s)),
     images,
   }
   const blob = new Blob([JSON.stringify(documentData, null, 2)], { type: 'application/json' })
@@ -84,10 +63,17 @@ export async function importDocument(json: any) {
   if (!json || typeof json !== 'object' || !Array.isArray(json.paragraphs)) throw new Error('Formato non valido')
   clearImages()
   doc.paragraphs = json.paragraphs
-  doc.styles = marksToStyles(
-    doc.paragraphs,
-    Array.isArray(json.marks) && json.marks.every((para: any) => Array.isArray(para)) ? json.marks : undefined
-  )
+  if (json.version === 2 && Array.isArray(json.styleIds) && Array.isArray(json.styleTable)) {
+    // Re-intern the serialized table so indices and the key map stay in sync.
+    const remap = reinternTable(json.styleTable)
+    doc.styleIds = json.styleIds.map((arr: any) => Uint16Array.from(arr.map((old: number) => remap[old] ?? 0)))
+  } else {
+    doc.styleIds = marksToStyleIds(
+      doc.paragraphs,
+      Array.isArray(json.marks) && json.marks.every((para: any) => Array.isArray(para)) ? json.marks : undefined
+    )
+  }
+  doc.blockAttrs = doc.paragraphs.map(() => defaultBlockAttrs())
   doc.cursor = { para: 0, offset: 0 }
   doc.selection = null
   view.selectedImageId = null
@@ -97,6 +83,8 @@ export async function importDocument(json: any) {
       await addImageFromDataURL(im.dataUrl, im.x, im.y, im.w, im.h)
     }
   }
+  // The replaced document has no undo history.
+  initHistory()
   markAllDirty()
   relayout()
 }

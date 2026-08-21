@@ -1,8 +1,6 @@
 import {
   CARET_COLOR,
   FONT,
-  FONT_FAMILY,
-  FONT_SIZE,
   INK,
   LINE_HEIGHT,
   PAD_X,
@@ -15,7 +13,7 @@ import { caretPixelPosition, lineForCursor } from '../layout/caret-position'
 import { docToVisualY } from '../layout/pagination'
 import { measureTextWidthOnPara } from '../measure'
 import { getComposition } from '../model/composition'
-import { getStyleRunsInRange, styleAt } from '../model/runs'
+import { fontForStyle, getStyleRunsInRange, styleAt, styleFontSize } from '../model/runs'
 import { getSelectionRanges } from '../model/selection'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
@@ -25,15 +23,8 @@ import { updateCaretDom } from './caret'
 // viewport-sized and pinned to the visible top of the scroll container; the
 // origin is translated by scrollTop and only the visible band of lines is
 // painted, so a 100-page document costs the same as a one-page one.
-
-const fontFor = (style: { bold: boolean; italic: boolean; underline: boolean; headline: boolean }): string => {
-  const fontSize = style.headline ? Math.round(FONT_SIZE * 1.6) : FONT_SIZE
-  const parts: string[] = []
-  if (style.italic) parts.push('italic')
-  if (style.bold) parts.push('700')
-  parts.push(fontSize + 'px')
-  return parts.join(' ') + ' ' + FONT_FAMILY
-}
+// Colour, background, strikethrough and super/subscript are paint-only: they
+// never reach pretext (RICH-TEXT-MODEL.md §7).
 
 /**
  * Where a line is painted, in the same space as docWrap.scrollTop: document Y
@@ -127,21 +118,36 @@ export function draw() {
     if (!line.text) continue
     let xPos = PAD_X + line.x
     const globalStart = line.startOffset
+    const lineTopY = PAD_Y + docToVisualY(line.yTop)
     for (const style of getStyleRunsInRange(line.paraIndex, globalStart, line.endOffset)) {
       const segText = line.text.slice(style.start - globalStart, style.end - globalStart)
-      const fontSize = style.headline ? Math.round(FONT_SIZE * 1.6) : FONT_SIZE
-      ctx.font = fontFor(style)
-      const localBaseline = fontSize * 0.92
-      ctx.fillText(segText, xPos, PAD_Y + docToVisualY(line.yTop) + localBaseline)
+      const fontSize = styleFontSize(style)
+      ctx.font = fontForStyle(style)
       measureCtx.font = ctx.font
       const w = measureCtx.measureText(segText).width
+      if (style.background) {
+        ctx.fillStyle = style.background
+        ctx.fillRect(xPos, lineTopY + 2, w, (line.height || LINE_HEIGHT) - 5)
+      }
+      ctx.fillStyle = style.color
+      const baselineShift = style.baseline === 'super' ? -fontSize * 0.28 : style.baseline === 'sub' ? fontSize * 0.18 : 0
+      const baselineY = lineTopY + fontSize * 0.92 + baselineShift
+      ctx.fillText(segText, xPos, baselineY)
       if (style.underline) {
-        const uy = PAD_Y + docToVisualY(line.yTop) + localBaseline + 2
-        ctx.strokeStyle = INK
+        const uy = baselineY + 2
+        ctx.strokeStyle = style.color
         ctx.lineWidth = 1
         ctx.beginPath()
         ctx.moveTo(xPos, uy)
         ctx.lineTo(xPos + w, uy)
+        ctx.stroke()
+      }
+      if (style.strike) {
+        ctx.strokeStyle = style.color
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        ctx.moveTo(xPos, baselineY - fontSize * 0.42)
+        ctx.lineTo(xPos + w, baselineY - fontSize * 0.42)
         ctx.stroke()
       }
       xPos += w
@@ -159,7 +165,7 @@ export function draw() {
       const caretLine = lineForCursor(doc.cursor)
       const visualY = docToVisualY(pos.y)
       const style = styleAt(composition.para, composition.offset)
-      measureCtx.font = fontFor(style)
+      measureCtx.font = fontForStyle(style)
       const w = measureCtx.measureText(composition.text).width
       const y = PAD_Y + visualY + (caretLine && caretLine.height ? caretLine.height - 4 : LINE_HEIGHT - 4)
       ctx.strokeStyle = CARET_COLOR

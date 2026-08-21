@@ -1,4 +1,4 @@
-import { FONT, FONT_FAMILY, FONT_SIZE, PAD_X, PAD_Y, PAGE_GAP, PAGE_HEIGHT } from '../config'
+import { FONT, FONT_FAMILY, INK, PAD_X, PAD_Y, PAGE_GAP, PAGE_HEIGHT } from '../config'
 import { convertImageToDataURL } from '../images/images'
 import { getStyleRunsInRange } from '../model/runs'
 import { view } from '../state/view'
@@ -34,11 +34,16 @@ export async function exportHTML() {
       for (const style of getStyleRunsInRange(line.paraIndex, globalStart, line.endOffset)) {
         const segText = escapeHtml(line.text.slice(style.start - globalStart, style.end - globalStart))
         let segHtml = segText
+        if (style.strike) segHtml = `<s>${segHtml}</s>`
         if (style.underline) segHtml = `<u>${segHtml}</u>`
         if (style.italic) segHtml = `<i>${segHtml}</i>`
         if (style.bold) segHtml = `<b>${segHtml}</b>`
-        // B6: headline runs keep their larger size in the export.
-        if (style.headline) segHtml = `<span style="font-size:${Math.round(FONT_SIZE * 1.6)}px">${segHtml}</span>`
+        // Rich styles: colour/background are paint-only, so they survive as CSS.
+        const inline: string[] = []
+        if (style.color && style.color !== INK) inline.push(`color:${style.color}`)
+        if (style.background) inline.push(`background:${style.background}`)
+        if (style.headline) inline.push(`font-size:${Math.round(style.fontSize * 1.6)}px`)
+        if (inline.length > 0) segHtml = `<span style="${inline.join(';')}">${segHtml}</span>`
         runs.push(segHtml)
       }
       pageInner += `<div class="line" style="left:${left}px;top:${top}px;font:${FONT};">${runs.join('')}</div>`

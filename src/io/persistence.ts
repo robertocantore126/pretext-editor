@@ -2,18 +2,22 @@
 // Owned by Agent A (docs/PARALLEL-PLAN.md).
 //
 // Subscribes to the model's edit hook (model/document.ts), so main.ts (frozen)
-// never changes. Images are serialized as data URLs through the same path
-// io/json.ts already uses (view.images + convertImageToDataURL); a handoff row
-// in docs/PARALLEL-PLAN.md asks B for serializeImages/restoreImages + Blob
-// storage to replace that.
+// never changes. The saved payload is the v2 rich format (interned style table +
+// per-char ids + block attrs, RICH-TEXT-MODEL.md §4.1); legacy byte-array
+// autosaves are migrated on restore. Images are serialized as data URLs through
+// the same path io/json.ts already uses (view.images + convertImageToDataURL);
+// a handoff row in docs/PARALLEL-PLAN.md asks B for serializeImages/restoreImages
+// + Blob storage to replace that.
 
 import { repositionGhostInput } from '../edit/caret'
+import { initHistory } from '../edit/history'
 import { markAllDirty } from '../model/dirty'
+import { reinternTable, styleIdsFromBytes } from '../model/styles'
 import { subscribeEdits, subscribeReset } from '../model/document'
 import { relayout } from '../layout/engine'
 import { addImageFromDataURL, clearImages, convertImageToDataURL } from '../images/images'
 import { ghostInput } from '../dom'
-import { doc } from '../state/doc'
+import { defaultBlockAttrs, doc } from '../state/doc'
 import { view } from '../state/view'
 
 const DB_NAME = 'pretext-editor'
@@ -72,8 +76,11 @@ async function saveNow(): Promise<void> {
       }))
     )
     const payload = {
+      version: 2,
       paragraphs: doc.paragraphs.slice(),
-      styles: doc.styles.map((s) => Array.from(s)),
+      styleTable: doc.styleTable,
+      styleIds: doc.styleIds.map((s) => Array.from(s)),
+      blockAttrs: doc.blockAttrs.map((a) => ({ ...a })),
       cursor: { para: doc.cursor.para, offset: doc.cursor.offset },
       selection: doc.selection
         ? {
@@ -97,11 +104,25 @@ function clearSaved(): void {
 
 function applySaved(saved: any): void {
   doc.paragraphs = saved.paragraphs.map((p: unknown) => String(p))
-  doc.styles = doc.paragraphs.map((_, i) => {
-    const arr = Array.isArray(saved.styles?.[i]) ? saved.styles[i] : undefined
-    if (arr && arr.length === doc.paragraphs[i].length) return Uint8Array.from(arr)
-    return new Uint8Array(doc.paragraphs[i].length)
-  })
+  if (saved.version === 2 && Array.isArray(saved.styleIds) && Array.isArray(saved.styleTable)) {
+    // Re-intern the serialized table so indices and the key map stay in sync.
+    const remap = reinternTable(saved.styleTable)
+    doc.styleIds = saved.styleIds.map((arr: any) =>
+      Uint16Array.from(arr.map((old: number) => remap[old] ?? 0))
+    )
+  } else if (Array.isArray(saved.styles)) {
+    // Legacy byte-array autosave: convert the old bits onto the table.
+    doc.styleIds = doc.paragraphs.map((_, i) => {
+      const arr = Array.isArray(saved.styles[i]) ? saved.styles[i] : undefined
+      if (arr && arr.length === doc.paragraphs[i].length) return styleIdsFromBytes(Uint8Array.from(arr))
+      return new Uint16Array(doc.paragraphs[i].length)
+    })
+  } else {
+    doc.styleIds = doc.paragraphs.map((t) => new Uint16Array(t.length))
+  }
+  doc.blockAttrs = Array.isArray(saved.blockAttrs)
+    ? doc.paragraphs.map((_, i) => ({ ...defaultBlockAttrs(), ...(saved.blockAttrs[i] ?? {}) }))
+    : doc.paragraphs.map(() => defaultBlockAttrs())
   doc.cursor =
     saved.cursor && typeof saved.cursor.para === 'number' && typeof saved.cursor.offset === 'number'
       ? { para: saved.cursor.para, offset: saved.cursor.offset }
@@ -115,6 +136,8 @@ function applySaved(saved: any): void {
     if (!im || typeof im.dataUrl !== 'string') continue
     addImageFromDataURL(im.dataUrl, im.x ?? 0, im.y ?? 0, im.w ?? 160, im.h ?? 160)
   }
+  // The restored document has no undo history.
+  initHistory()
   markAllDirty()
   relayout()
   repositionGhostInput()
