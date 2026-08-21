@@ -1,6 +1,7 @@
 import { docWrap, ghostInput } from '../dom'
 import { caretPixelPosition } from '../layout/caret-position'
-import { pointerToDocument } from '../layout/coords'
+import { paragraphTop, pointerToDocument } from '../layout/coords'
+import { pixelToCursor } from '../layout/caret-position'
 import { relayout, scheduleRelayout } from '../layout/engine'
 import { notifyChanged } from '../model/document'
 import { trace } from '../debug/tracer'
@@ -80,8 +81,8 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
   const id = 'img-' + ++imgCounter
   const rec: FloatImage =
     placement.kind === 'fixed'
-      ? { id, img: imgEl, wrapper, x: placement.x, y: placement.y, w: placement.w, h: placement.h, loaded: false, objectUrl: src }
-      : { id, img: imgEl, wrapper, x: 0, y: 0, w: 160, h: 160, loaded: false, objectUrl: src }
+      ? { id, img: imgEl, wrapper, x: placement.x, y: placement.y, anchorPara: 0, anchorDy: placement.y, w: placement.w, h: placement.h, loaded: false, objectUrl: src }
+      : { id, img: imgEl, wrapper, x: 0, y: 0, anchorPara: 0, anchorDy: 0, w: 160, h: 160, loaded: false, objectUrl: src }
   view.images.push(rec)
   trace('image', 'create', { id, placement: placement.kind, srcKind: src.slice(0, 5) })
   notifyChanged()
@@ -116,6 +117,10 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
       rec.y = Math.max(0, y)
     }
     rec.loaded = true
+    // The image belongs beside a paragraph, not at an absolute height: anchor it
+    // where it was put, so editing above carries it along instead of leaving it
+    // stranded next to whatever text has slid into that spot.
+    anchorImageToText(rec)
     relayout()
     buildAlphaMapForImage(rec)
   }
@@ -148,6 +153,19 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
   })
 
   return rec
+}
+
+/**
+ * Bind an image to the paragraph it currently sits beside, keeping its offset
+ * from that paragraph's top. Called when the image is placed and while it is
+ * dragged; from then on the engine derives its Y from the anchor, so the image
+ * travels with its text instead of staying at an absolute height that stops
+ * meaning anything as soon as the text above it changes.
+ */
+export function anchorImageToText(rec: FloatImage): void {
+  const para = pixelToCursor(rec.x, rec.y).para
+  rec.anchorPara = para
+  rec.anchorDy = rec.y - paragraphTop(para)
 }
 
 export function addImageFromDataURL(dataUrl: string, x: number, y: number, w: number, h: number) {
@@ -349,6 +367,9 @@ export function initImageInteractions() {
       const now = pointerToDocument(e.clientX, e.clientY)
       rec.x = Math.max(0, Math.min(view.docWidth - rec.w, d.origX + (now.x - d.grabX)))
       rec.y = Math.max(0, d.origY + (now.y - d.grabY))
+      // Re-anchor as it moves: the engine derives y from the anchor on the next
+      // pass, so leaving the old one would snap the image back.
+      anchorImageToText(rec)
     } else {
       const newW = Math.max(40, d.origW + dx)
       rec.w = Math.round(newW)

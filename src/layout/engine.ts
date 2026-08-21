@@ -9,7 +9,7 @@ import type { SectionLayout } from '../state/view'
 
 import { doc } from '../state/doc'
 import { view } from '../state/view'
-import type { LineInfo } from '../types'
+import type { FloatImage, LineInfo } from '../types'
 import { takeDirty, takeShifts } from '../model/dirty'
 import { styleVersion } from '../model/runs'
 import { paraCache, shiftCaches } from './cache'
@@ -31,6 +31,48 @@ function sectionMarkAt(paraIndex: number): SectionMark | undefined {
 let lastSectionSignature = ''
 
 /**
+ * Images grouped by the paragraph they are anchored to, rebuilt once per pass.
+ * Scanning every image for every paragraph was 4000 x 40 comparisons on a
+ * stress document and showed up in the numbers; most paragraphs have no image.
+ */
+let anchoredByPara = new Map<number, FloatImage[]>()
+
+function indexAnchors(): void {
+  anchoredByPara = new Map()
+  for (const im of view.images) {
+    const list = anchoredByPara.get(im.anchorPara)
+    if (list) list.push(im)
+    else anchoredByPara.set(im.anchorPara, [im])
+  }
+}
+
+/**
+ * Images anchored to this paragraph ride with it: their document Y is derived
+ * from the paragraph's top, every pass, before anything asks what they obstruct.
+ * This is what keeps a figure beside its text when the text above it grows.
+ */
+function resolveAnchoredImages(paraIndex: number, yStart: number): void {
+  const anchored = anchoredByPara.get(paraIndex)
+  if (!anchored) return
+  for (const im of anchored) im.y = yStart + im.anchorDy
+}
+
+/**
+ * Paragraph indices moved, so the anchors must follow — the same splice the
+ * layout caches get (model/dirty.ts). An image anchored inside a stretch that
+ * was deleted attaches to the paragraph that absorbed it rather than pointing
+ * at nothing.
+ */
+function shiftImageAnchors(at: number, removed: number, inserted: number): void {
+  const delta = inserted - removed
+  for (const im of view.images) {
+    if (im.anchorPara < at) continue
+    if (im.anchorPara < at + removed) im.anchorPara = Math.max(0, at - 1)
+    else im.anchorPara += delta
+  }
+}
+
+/**
  * The obstruction key of a paragraph: which images overlap its vertical band,
  * plus its page position (B5 makes height depend on page boundaries). Any
  * change means the paragraph must be re-fitted rather than translated.
@@ -42,7 +84,10 @@ function obstructionKey(paraIndex: number, yStart: number, estHeight: number): s
   for (const im of view.images) {
     if (!im.loaded) continue
     if (im.y < yStart + estHeight && im.y + im.h > yStart) {
-      key += '|' + im.id + ':' + Math.round(im.x) + ':' + Math.round(im.y) + ':' + Math.round(im.w) + ':' + Math.round(im.h)
+      // Relative to the paragraph, not absolute: when a paragraph and the
+      // images beside it translate together, nothing about the obstruction has
+      // actually changed and the cached layout stays valid.
+      key += '|' + im.id + ':' + Math.round(im.x) + ':' + Math.round(im.y - yStart) + ':' + Math.round(im.w) + ':' + Math.round(im.h)
     }
   }
   return key
@@ -64,12 +109,19 @@ export function relayout() {
   const dirty = takeDirty()
   // Paragraph indices moved since the last pass: re-key the caches the same way
   // the model re-keyed its versions, in the order the splices happened.
-  for (const shift of takeShifts()) shiftCaches(shift.at, shift.removed, shift.inserted)
+  for (const shift of takeShifts()) {
+    shiftCaches(shift.at, shift.removed, shift.inserted)
+    shiftImageAnchors(shift.at, shift.removed, shift.inserted)
+  }
   const cssWidth = docWrap.clientWidth || 800
   const docWidth = Math.max(80, cssWidth - PAD_X * 2)
   view.docWidth = docWidth
 
   const n = doc.paragraphs.length
+  // An anchor can only point at a paragraph that exists; a document replaced
+  // wholesale (import, restore) leaves the old ones dangling.
+  for (const im of view.images) im.anchorPara = Math.max(0, Math.min(im.anchorPara, n - 1))
+  indexAnchors()
   if (dirty === 'all') {
     // Index shifts (splits/merges/imports) invalidate every cache entry.
     for (const k of Object.keys(paraCache)) delete paraCache[+k]
@@ -92,6 +144,7 @@ export function relayout() {
       sectionsOut.push({ ...mark, paraIndex: i, y })
       y += titleBlockHeight(mark.level)
     }
+    resolveAnchoredImages(i, y)
     const cached = paraCache[i]
 
     // Early exit: once past the dirty range and every image band with no
@@ -111,6 +164,7 @@ export function relayout() {
           if (jMark) {
             probeY = Math.ceil(probeY / PAGE_HEIGHT) * PAGE_HEIGHT + titleBlockHeight(jMark.level)
           }
+          resolveAnchoredImages(j, probeY)
         }
         if (
           !c ||

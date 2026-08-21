@@ -268,3 +268,36 @@ config, types  →  state, dom  →  measure  →  layout/*  →  render/draw
                                                               ↓
                             input/*  ←  edit/*, images/*, io/*
 ```
+
+---
+
+## Ancoraggio delle immagini (2026-08-22)
+
+Un'immagine **non** vive a una coordinata assoluta del documento. Vive accanto a un
+paragrafo: `FloatImage` porta `anchorPara` e `anchorDy`, e `im.y` è **derivata** a ogni
+passata di layout come `paragraphTop(anchorPara) + anchorDy`.
+
+Il motivo è che una posizione assoluta smette di significare qualcosa appena si scrive sopra:
+il testo scorre, la figura resta indietro, e la pagina in cui era stata messa non è più quella.
+Con l'ancora, modificare sopra sposta paragrafo e immagine insieme; modificare sotto non muove
+né l'uno né l'altra.
+
+Conseguenze da tenere a mente:
+
+- **Nessuno assegna `im.y` fuori dal motore.** Chi posiziona un'immagine (drop, incolla,
+  trascinamento, ripristino) chiama `anchorImageToText`, che sceglie il paragrafo sotto il
+  punto e memorizza lo scostamento.
+- **Gli indici degli ancoraggi seguono gli splice** di paragrafo, con lo stesso meccanismo che
+  ri-chiava le cache di layout (`model/dirty.ts`). Un'immagine ancorata dentro un tratto
+  cancellato si riattacca al paragrafo che l'ha assorbito.
+- **La chiave di ostruzione è relativa** al paragrafo, non assoluta: quando un paragrafo e le
+  immagini accanto traslano insieme non è cambiato niente, e il layout in cache resta valido.
+  Con una chiave assoluta ogni modifica sopra un'immagine avrebbe forzato il re-fit di tutto
+  quello che c'è sotto.
+- **Il formato su disco non cambia.** Si continua a salvare x/y assoluti; all'apertura
+  l'ancora viene ricavata dalla posizione, che nel documento appena caricato dà lo stesso
+  risultato.
+- L'ancora è al paragrafo, non alla pagina. Se un giorno serve "fissa alla pagina" (l'immagine
+  resta dov'è e il testo le scorre attorno passandoci sopra), è un flag per immagine che
+  salta la risoluzione: è una scelta di prodotto, non un limite del modello.
+

@@ -15,6 +15,8 @@
 
 import { PAD_X, PAD_Y } from '../config'
 import { docWrap } from '../dom'
+import { view } from '../state/view'
+import { paraCache } from './cache'
 import { visualToDocY } from './pagination'
 
 export interface DocumentPoint {
@@ -22,6 +24,21 @@ export interface DocumentPoint {
   x: number
   /** Y in document space, page gaps already removed. */
   y: number
+}
+
+/**
+ * The document Y where a paragraph starts. From the layout cache when it is
+ * there, otherwise from the lines it emitted — one of the two always is, for a
+ * paragraph that has been laid out.
+ */
+export function paragraphTop(paraIndex: number): number {
+  const cached = paraCache[paraIndex]
+  if (cached) return cached.yStart
+  let top: number | null = null
+  for (const line of view.lines) {
+    if (line.paraIndex === paraIndex) top = top === null ? line.yTop : Math.min(top, line.yTop)
+  }
+  return top ?? 0
 }
 
 /** Where a mouse event points, in document coordinates. */

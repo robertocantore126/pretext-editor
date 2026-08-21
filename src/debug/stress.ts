@@ -23,7 +23,7 @@ import { doc } from '../state/doc'
 import { view } from '../state/view'
 import { docWrap } from '../dom'
 import { PAD_X, PAD_Y } from '../config'
-import { pointerToDocument } from '../layout/coords'
+import { paragraphTop, pointerToDocument } from '../layout/coords'
 import { pixelToCursor } from '../layout/caret-position'
 import { docToVisualY } from '../layout/pagination'
 import { trace } from './tracer'
@@ -112,6 +112,7 @@ export interface StressReport {
     linesSpillingAcrossSections: number
     overlappingParagraphs: number
     hitTestMisses: number
+    imagesOffTheirAnchor: number
   }
   memoryMB?: number
 }
@@ -318,6 +319,7 @@ export async function runStressBenchmark(): Promise<StressReport> {
       linesSpillingAcrossSections: spill,
       overlappingParagraphs: overlappingParagraphs().length,
       hitTestMisses: checkHitTesting().length,
+      imagesOffTheirAnchor: checkImageAnchors().length,
     },
     memoryMB: (performance as any).memory
       ? Math.round((performance as any).memory.usedJSHeapSize / 1048576)
@@ -411,6 +413,23 @@ export function checkHitTesting(samples = 40): Array<{ paraIndex: number; got: n
   return misses
 }
 
+/**
+ * Every image sits exactly where its anchor says it should. The anchor is the
+ * promise that a figure stays beside its text when the text above it grows; a
+ * drift here means some path wrote an absolute y and the promise is broken.
+ */
+export function checkImageAnchors(): Array<{ id: string; expected: number; actual: number }> {
+  const bad: Array<{ id: string; expected: number; actual: number }> = []
+  for (const im of view.images) {
+    if (!im.loaded) continue
+    const expected = paragraphTop(im.anchorPara) + im.anchorDy
+    if (Math.abs(im.y - expected) > 0.5) {
+      bad.push({ id: im.id, expected: Math.round(expected), actual: Math.round(im.y) })
+    }
+  }
+  return bad
+}
+
 const NEWLINE = String.fromCharCode(10)
 
 export function runEditFuzz(steps = 300, seed = 3): { steps: number; failures: unknown[]; ms: number } {
@@ -433,6 +452,8 @@ export function runEditFuzz(steps = 300, seed = 3): { steps: number; failures: u
     relayout()
     const overlaps = overlappingParagraphs()
     if (overlaps.length > 0) failures.push({ step, kind: 'overlap', ...overlaps[0], count: overlaps.length })
+    const adrift = checkImageAnchors()
+    if (adrift.length > 0) failures.push({ step, kind: 'anchor', ...adrift[0], count: adrift.length })
     for (const line of view.lines) {
       const source = doc.paragraphs[line.paraIndex]
       if (source === undefined || source.slice(line.startOffset, line.endOffset) !== line.text) {

@@ -6,7 +6,23 @@ export interface FloatImage {
   img: HTMLImageElement
   wrapper: HTMLDivElement
   x: number
+  /**
+   * Document Y, **derived** every layout pass from the anchor below. Do not
+   * assign it outside the engine: an absolute Y stops meaning anything the
+   * moment text above the image is edited, which is the whole reason the anchor
+   * exists.
+   */
   y: number
+  /**
+   * The paragraph this image belongs beside, and how far below that paragraph's
+   * top it sits. Editing above the anchor moves the paragraph and the image
+   * together; editing below leaves both where they are.
+   *
+   * The index is kept correct across splits and merges by the same splice
+   * mechanism that re-keys the layout caches (model/dirty.ts).
+   */
+  anchorPara: number
+  anchorDy: number
   w: number
   h: number
   loaded: boolean
