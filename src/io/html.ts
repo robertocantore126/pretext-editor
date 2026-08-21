@@ -1,6 +1,7 @@
 import { FONT, FONT_FAMILY, INK, PAD_X, PAD_Y, PAGE_GAP, PAGE_HEIGHT } from '../config'
 import { convertImageToDataURL } from '../images/images'
 import { getStyleRunsInRange } from '../model/runs'
+import { titleFont, TITLE_SPACE_ABOVE } from '../render/title'
 import { view } from '../state/view'
 
 export function escapeHtml(s: string) {
@@ -41,6 +42,7 @@ export async function exportHTML() {
   .doc{width:${pageW}px;margin:0 auto}
   .page{position:relative;width:${pageW}px;height:${PAGE_HEIGHT + PAD_Y * 2}px;background:#f7f5f1;border:1px solid #d3d0c8;margin-bottom:${PAGE_GAP}px;box-sizing:border-box;}
   .line{position:absolute;white-space:pre}
+  .doc-title{position:absolute;white-space:pre;color:${INK}}
   .img{position:absolute}
   `
 
@@ -81,6 +83,12 @@ export async function exportHTML() {
         lineStyle += `width:${paintedW.toFixed(2)}px;text-align:justify;white-space:normal;`
       }
       pageInner += `<div class="line" style="${lineStyle}">${runs.join('')}</div>`
+    }
+    // Each tab heads the page it opens, exactly as on screen (docs/TABS.md).
+    for (const s of view.sections) {
+      if (!s.title || s.y < pageTop || s.y >= pageTop + PAGE_HEIGHT) continue
+      const top = PAD_Y + (s.y - pageTop) + TITLE_SPACE_ABOVE
+      pageInner += `<div class="doc-title" style="left:${PAD_X}px;top:${top}px;font:${titleFont(s.level)};">${escapeHtml(s.title)}</div>`
     }
     // images on page
     for (const im of imgs) {

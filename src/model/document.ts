@@ -6,6 +6,7 @@
 //
 // main.ts (frozen) reaches the model only through resetDocument.
 
+import type { BlockAttrs } from '../types/doc'
 import { defaultBlockAttrs, doc } from '../state/doc'
 import { markAllDirty, markParagraphDirty } from './dirty'
 import { clearSelection } from './selection'
@@ -27,6 +28,16 @@ export interface EditRecord {
   deletedText: string
   /** Per-paragraph style ids of the removed text. */
   deletedIds: Uint16Array[]
+  /**
+   * Block attributes of the paragraphs the delete swallowed, aligned with
+   * `deletedText.split('\n')` from index 1 (the first part is the tail of the
+   * paragraph the edit started in, which survives). Without these, undoing a
+   * paragraph deletion brought the text back with default attributes: alignment,
+   * heading kind and — since docs/TABS.md — the tab marker were silently lost.
+   */
+  deletedAttrs: BlockAttrs[]
+  /** Block attributes to give the paragraphs this insert creates, same alignment. */
+  insertAttrs?: BlockAttrs[]
 }
 
 function spliceIds(bytes: Uint16Array, start: number, deleteCount: number, insert: Uint16Array): Uint16Array {
@@ -64,7 +75,8 @@ export function applyEdit(
   offset: number,
   deleteCount: number,
   insertText: string,
-  insertIds?: Uint16Array[]
+  insertIds?: Uint16Array[],
+  insertAttrs?: BlockAttrs[]
 ): EditRecord {
   const paras = doc.paragraphs
   const styles = doc.styleIds
@@ -87,6 +99,9 @@ export function applyEdit(
   let remaining = Math.max(0, deleteCount)
   let deletedText = ''
   const deletedIds: Uint16Array[] = []
+  // One entry per boundary the delete consumes, in order: the attributes of the
+  // paragraph that gets merged away.
+  const deletedAttrs: BlockAttrs[] = []
   let cur = p
   let curOff = o
   // BUGHUNT H1: an edit that crosses a paragraph boundary re-indexes the
@@ -117,7 +132,9 @@ export function applyEdit(
     styles[cur] = spliceIds(styles[cur], styles[cur].length, 0, styles[cur + 1])
     paras.splice(cur + 1, 1)
     styles.splice(cur + 1, 1)
-    // The merged paragraph keeps the first paragraph's block attributes.
+    // The merged paragraph keeps the first paragraph's block attributes; the
+    // ones being dropped are recorded so undo can put them back.
+    deletedAttrs.push({ ...attrs[cur + 1] })
     attrs.splice(cur + 1, 1)
     curOff = curLen
   }
@@ -159,14 +176,17 @@ export function applyEdit(
   } else {
     paras[p] = headT + parts[0]
     styles[p] = concatIds([headI, partsIds[0]])
+    // Replaying an undone delete must restore the attributes the paragraphs had
+    // (docs/TABS.md: a tab marker lives there); a fresh split gets defaults.
+    const attrFor = (i: number) => ({ ...(insertAttrs?.[i - 1] ?? defaultBlockAttrs()) })
     for (let i = 1; i < n - 1; i++) {
       paras.splice(p + i, 0, parts[i])
       styles.splice(p + i, 0, partsIds[i])
-      attrs.splice(p + i, 0, defaultBlockAttrs())
+      attrs.splice(p + i, 0, attrFor(i))
     }
     paras.splice(p + n - 1, 0, parts[n - 1] + tailT)
     styles.splice(p + n - 1, 0, concatIds([partsIds[n - 1], tailI]))
-    attrs.splice(p + n - 1, 0, defaultBlockAttrs())
+    attrs.splice(p + n - 1, 0, attrFor(n - 1))
   }
 
   doc.cursor = { para: p + n - 1, offset: o + parts[n - 1].length }
@@ -183,6 +203,8 @@ export function applyEdit(
     insertIds: partsIds,
     deletedText,
     deletedIds: alignedDeletedIds,
+    deletedAttrs,
+    insertAttrs,
   }
   notifyEdits(record)
   return record

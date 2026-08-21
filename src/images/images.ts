@@ -26,6 +26,14 @@ type Placement =
 export function convertImageToDataURL(img: HTMLImageElement): Promise<string | null> {
   return new Promise((resolve) => {
     try {
+      // Already a data URL (pasted, imported, restored): hand it back untouched.
+      // Re-encoding through a canvas costs a full decode per save — and per tab
+      // once a file holds several of them (docs/TABS.md) — and would silently
+      // turn JPEG into PNG. A resize changes w/h on the record, not the pixels.
+      if (img.src.startsWith('data:')) {
+        resolve(img.src)
+        return
+      }
       if (!img.naturalWidth || !img.naturalHeight) {
         resolve(null)
         return

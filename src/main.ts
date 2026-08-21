@@ -3,8 +3,12 @@
 //
 // FROZEN (docs/PARALLEL-PLAN.md §0.6). Neither agent edits this file: it only calls
 // across owned contracts, and every init hook either track needs is already wired.
+//
+// Exception, on the record (docs/TABS.md §5): the two-agent phase is closed and the
+// tab panel needs an init point, so it gets one import and one call below.
 
 import { importInput } from './dom'
+import { initTabsPanel } from './ui/tabs-panel'
 import { initHistory } from './edit/history'
 import { applySelectionMark, toggleHeadlineForPara } from './edit/marks'
 import { clearImages, initImageInteractions } from './images/images'
@@ -78,6 +82,7 @@ initClipboard()    // A4
 initPersistence()  // A5
 // Track B
 initVirtualScroll() // B4
+initTabsPanel()     // docs/TABS.md
 
 let resizeRaf: number | undefined
 window.addEventListener('resize', () => {

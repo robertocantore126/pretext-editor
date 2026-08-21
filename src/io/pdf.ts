@@ -3,6 +3,7 @@ import { PAD_X, PAD_Y, PAGE_HEIGHT } from '../config'
 import { convertImageToDataURL } from '../images/images'
 import { measureTextWidthOnPara } from '../measure'
 import { getStyleRunsInRange, styleFontSize } from '../model/runs'
+import { titleFontSize, TITLE_SPACE_ABOVE } from '../render/title'
 import { view } from '../state/view'
 
 /**
@@ -41,6 +42,19 @@ export async function exportPDF() {
     // background
     pdf.setFillColor(247, 245, 241)
     pdf.rect(0, 0, pageW, pageH, 'F')
+    // Each tab heads the page it opens (docs/TABS.md).
+    for (const s of view.sections) {
+      if (!s.title || s.y < pi * PAGE_HEIGHT || s.y >= (pi + 1) * PAGE_HEIGHT) continue
+      const size = titleFontSize(s.level)
+      try {
+        pdf.setFont(undefined as any, 'bold' as any)
+      } catch {}
+      pdf.setFontSize(size)
+      pdf.text(s.title, PAD_X, PAD_Y + (s.y - pi * PAGE_HEIGHT) + TITLE_SPACE_ABOVE + size * 0.92)
+      try {
+        pdf.setFont(undefined as any, 'normal' as any)
+      } catch {}
+    }
     for (const line of view.lines) {
       if (line.yTop < pi * PAGE_HEIGHT || line.yTop >= (pi + 1) * PAGE_HEIGHT) continue
       const globalStart = line.startOffset

@@ -4,7 +4,9 @@ import { repositionGhostInput } from '../edit/caret'
 import { resetCaretBlink } from '../render/caret'
 import { addImageFromFile, deselectImage } from '../images/images'
 import { pixelToCursor, resetStickyX } from '../layout/caret-position'
+import { visualToDocY } from '../layout/pagination'
 import { draw } from '../render/draw'
+import { sectionTitleAt, startTitleRename } from '../render/title'
 import {
   clearSelection,
   isCollapsed,
@@ -23,6 +25,15 @@ export function initPointer() {
     // B4: the document scrolls inside .doc-wrap, so client offsets become
     // document offsets only after adding the current scrollTop.
     const py = docWrap.scrollTop + (e.clientY - rect.top) - PAD_Y
+    // A title band belongs to the tab, not to the text: clicking it renames the
+    // tab in place instead of putting the caret in the paragraph below
+    // (docs/TABS.md).
+    const titleHit = sectionTitleAt(visualToDocY(py))
+    if (titleHit) {
+      deselectImage()
+      startTitleRename(titleHit)
+      return
+    }
     deselectImage()
     resetStickyX()
     const c = pixelToCursor(px, py)

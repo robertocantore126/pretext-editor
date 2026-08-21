@@ -65,6 +65,9 @@ docSpacer.appendChild(ghostInput)
 
 docWrap.addEventListener('click', (e) => {
   if ((e.target as HTMLElement).closest('.img-handle')) return
+  // A title rename is in flight (docs/TABS.md §7): stealing focus here would
+  // blur it and close the editor on the same click that opened it.
+  if (document.querySelector('.doc-title-input')) return
   ghostInput.focus()
 })
 

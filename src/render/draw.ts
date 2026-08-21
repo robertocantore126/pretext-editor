@@ -18,6 +18,11 @@ import { getSelectionRanges } from '../model/selection'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
 import { updateCaretDom } from './caret'
+import { drawSectionTitles, titleBlockHeight } from './title'
+import { notifySections } from '../model/sections'
+
+/** The tab the caret was in on the previous paint (docs/TABS.md). */
+let lastActiveSectionId: string | null = null
 
 // Painting (ARCHITECTURE.md §4.3, docs/PARALLEL-PLAN.md B4): the canvas is
 // viewport-sized and pinned to the visible top of the scroll container; the
@@ -82,6 +87,8 @@ export function draw() {
   if (isEmptyDoc && !view.focused) {
     emptyHint.textContent = 'Clicca qui per iniziare a scrivere\u2026'
     emptyHint.style.font = FONT
+    // The hint sits where the first line will be, i.e. under the title.
+    emptyHint.style.top = PAD_Y + titleBlockHeight() + 'px'
   }
 
   // Page backgrounds for the pages intersecting the visible band.
@@ -98,6 +105,18 @@ export function draw() {
     const top = PAD_Y + p * pageSize
     ctx.fillRect(PAD_X - 8, top - 8, view.docWidth + 16, PAGE_HEIGHT + 16)
     ctx.strokeRect(PAD_X - 8, top - 8, view.docWidth + 16, PAGE_HEIGHT + 16)
+  }
+
+  // Each tab's name, first thing on the page it opens (docs/TABS.md).
+  drawSectionTitles(ctx, viewTop, viewBottom)
+  // Which tab the caret is in changes on a plain click, which relayouts nothing,
+  // so the panel's highlight is refreshed from here — where every caret move
+  // ends up. Only on a real change: draw() also runs on every caret blink.
+  let activeId: string | null = null
+  for (const s of view.sections) if (s.paraIndex <= doc.cursor.para) activeId = s.id
+  if (activeId !== lastActiveSectionId) {
+    lastActiveSectionId = activeId
+    notifySections()
   }
 
   ctx.fillStyle = INK

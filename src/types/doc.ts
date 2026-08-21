@@ -50,6 +50,15 @@ export interface BlockAttrs {
   list?: { type: 'bullet' | 'number'; level: number; marker: string }
   whiteSpace: 'normal' | 'pre'
   direction: 'ltr' | 'rtl'
+  /**
+   * This paragraph opens a tab (docs/TABS.md). A tab is not a separate file: the
+   * document stays one continuous roll of paper and a tab is a bookmark that
+   * folds it, so the marker rides on the paragraph that starts the section. It
+   * survives splits, merges and index shifts for free, because applyEdit already
+   * splices blockAttrs in lockstep with the text — an index-based list of
+   * sections would have to be re-derived after every edit.
+   */
+  section?: { id: string; title: string; level: 0 | 1 }
 }
 
 /** Legacy on-disk marks format (bold/italic/underline/headline), still accepted on import. */

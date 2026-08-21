@@ -39,6 +39,7 @@ export function initHistory(): void {
   redoStack.length = 0
 }
 
+
 // A "new document" (main.ts reset) invalidates the history of the previous one.
 subscribeReset(() => {
   undoStack.length = 0
@@ -65,6 +66,9 @@ export function recordEdit(record: EditRecord): void {
       insertIds: [concatU16(f.insertIds[0], record.insertIds[0])],
       deletedText: '',
       deletedIds: [],
+      // Pure typing creates and destroys no paragraphs, so there are no block
+      // attributes to carry either way.
+      deletedAttrs: [],
     }
     last.inverse = {
       paraIndex: f.paraIndex,
@@ -74,6 +78,7 @@ export function recordEdit(record: EditRecord): void {
       insertIds: [],
       deletedText: mergedText,
       deletedIds: mergedText.split('\n').map(() => new Uint16Array(0)),
+      deletedAttrs: [],
     }
     return
   }
@@ -89,6 +94,10 @@ export function recordEdit(record: EditRecord): void {
       insertIds: record.deletedIds,
       deletedText: record.insertText,
       deletedIds: record.insertIds,
+      // Symmetric with the forward edit: what the delete swallowed is what the
+      // undo must put back, block attributes included (docs/TABS.md).
+      deletedAttrs: record.insertAttrs ?? [],
+      insertAttrs: record.deletedAttrs,
     },
   })
 }
@@ -131,7 +140,7 @@ function applyEntry(entry: HistoryEntry, direction: 'undo' | 'redo'): void {
     notifyChanged()
   } else {
     const edit = direction === 'undo' ? entry.inverse : entry.forward
-    applyEdit(edit.paraIndex, edit.offset, edit.deleteCount, edit.insertText, edit.insertIds)
+    applyEdit(edit.paraIndex, edit.offset, edit.deleteCount, edit.insertText, edit.insertIds, edit.insertAttrs)
   }
   relayout()
 }

@@ -1,6 +1,24 @@
 import { FONT_SIZE, LINE_HEIGHT, PAD_X, PAD_Y, PAGE_GAP, PAGE_HEIGHT, PARA_GAP } from '../config'
 import { canvas, ctx, docSpacer, docWrap } from '../dom'
 import { draw } from '../render/draw'
+import { titleBlockHeight } from '../render/title'
+import { DEFAULT_FIRST_TITLE, notifySections } from '../model/sections'
+import type { SectionMark } from '../model/sections'
+import type { SectionLayout } from '../state/view'
+
+/**
+ * The tab that opens at this paragraph, if any. Paragraph 0 always opens one
+ * even without a marker: a roll of paper still has a beginning, and the panel
+ * must never be empty (docs/TABS.md).
+ */
+function sectionMarkAt(paraIndex: number): SectionMark | undefined {
+  const mark = doc.blockAttrs[paraIndex]?.section
+  if (mark) return mark
+  if (paraIndex === 0) return { id: 'implicit-first', title: DEFAULT_FIRST_TITLE, level: 0 }
+  return undefined
+}
+
+let lastSectionSignature = ''
 import { doc } from '../state/doc'
 import { view } from '../state/view'
 import type { LineInfo } from '../types'
@@ -52,12 +70,22 @@ export function relayout() {
   }
 
   const lines: LineInfo[] = []
+  const sectionsOut: SectionLayout[] = []
   let y = 0
   const dirtyFrom = dirty === 'all' ? 0 : dirty ? dirty.from : n
   const dirtyTo = dirty === 'all' ? n - 1 : dirty ? dirty.to : -1
   const maxObstructionBottom = view.images.reduce((m, im) => (im.loaded ? Math.max(m, im.y + im.h) : m), 0)
 
   for (let i = 0; i < n; i++) {
+    // A tab opens here (docs/TABS.md): the roll is folded so the section starts
+    // on a fresh page — that is what keeps writing in one tab from running into
+    // the next one's page — and its title takes the space above the first line.
+    const mark = sectionMarkAt(i)
+    if (mark) {
+      if (i > 0) y = Math.ceil(y / PAGE_HEIGHT) * PAGE_HEIGHT
+      sectionsOut.push({ ...mark, paraIndex: i, y })
+      y += titleBlockHeight(mark.level)
+    }
     const cached = paraCache[i]
 
     // Early exit: once past the dirty range and every image band with no
@@ -70,6 +98,14 @@ export function relayout() {
       let probeY = y
       for (let j = i; j < n; j++) {
         const c = paraCache[j]
+        // The probe must fold the roll exactly like the loop below does, or a
+        // section start makes every yStart below it look wrong.
+        if (j > i) {
+          const jMark = sectionMarkAt(j)
+          if (jMark) {
+            probeY = Math.ceil(probeY / PAGE_HEIGHT) * PAGE_HEIGHT + titleBlockHeight(jMark.level)
+          }
+        }
         if (
           !c ||
           c.yStart !== probeY ||
@@ -84,6 +120,16 @@ export function relayout() {
       }
       if (ok) {
         for (let j = i; j < n; j++) {
+          // i's own marker was already consumed above; the rest still have to be
+          // folded and recorded, or the tail's tabs vanish from the panel.
+          if (j > i) {
+            const jMark = sectionMarkAt(j)
+            if (jMark) {
+              y = Math.ceil(y / PAGE_HEIGHT) * PAGE_HEIGHT
+              sectionsOut.push({ ...jMark, paraIndex: j, y })
+              y += titleBlockHeight(jMark.level)
+            }
+          }
           const c = paraCache[j]
           for (const l of c.lines) lines.push(l)
           y += c.height + (j < n - 1 ? PARA_GAP : 0)
@@ -127,6 +173,15 @@ export function relayout() {
   }
 
   view.lines = lines
+  view.sections = sectionsOut
+  // The panel is a view of this list. It changes on tab operations *and* on
+  // ordinary typing (a tab slides down the roll as the one above it grows), so
+  // signal only when the list really differs instead of on every keystroke.
+  const signature = sectionsOut.map((s) => `${s.id}:${s.title}:${s.level}:${s.paraIndex}:${s.y}`).join('|')
+  if (signature !== lastSectionSignature) {
+    lastSectionSignature = signature
+    notifySections()
+  }
   const textHeight = y
 
   let maxImageBottom = 0
