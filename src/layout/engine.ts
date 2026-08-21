@@ -3,8 +3,18 @@ import { canvas, ctx, docSpacer, docWrap } from '../dom'
 import { draw } from '../render/draw'
 import { titleBlockHeight } from '../render/title'
 import { DEFAULT_FIRST_TITLE, notifySections } from '../model/sections'
+import { trace } from '../debug/tracer'
 import type { SectionMark } from '../model/sections'
 import type { SectionLayout } from '../state/view'
+
+import { doc } from '../state/doc'
+import { view } from '../state/view'
+import type { LineInfo } from '../types'
+import { takeDirty } from '../model/dirty'
+import { styleVersion } from '../model/runs'
+import { paraCache } from './cache'
+import { docToVisualY } from './pagination'
+import { layoutParagraph } from './paragraph'
 
 /**
  * The tab that opens at this paragraph, if any. Paragraph 0 always opens one
@@ -19,14 +29,6 @@ function sectionMarkAt(paraIndex: number): SectionMark | undefined {
 }
 
 let lastSectionSignature = ''
-import { doc } from '../state/doc'
-import { view } from '../state/view'
-import type { LineInfo } from '../types'
-import { takeDirty } from '../model/dirty'
-import { styleVersion } from '../model/runs'
-import { paraCache } from './cache'
-import { docToVisualY } from './pagination'
-import { layoutParagraph } from './paragraph'
 
 /**
  * The obstruction key of a paragraph: which images overlap its vertical band,
@@ -58,6 +60,7 @@ function estimateHeight(paraIndex: number): number {
 }
 
 export function relayout() {
+  const relayoutStart = performance.now()
   const dirty = takeDirty()
   const cssWidth = docWrap.clientWidth || 800
   const docWidth = Math.max(80, cssWidth - PAD_X * 2)
@@ -188,6 +191,16 @@ export function relayout() {
   for (const im of view.images) maxImageBottom = Math.max(maxImageBottom, im.y + im.h)
   const docHeight = Math.max(textHeight, maxImageBottom)
   view.docHeight = docHeight
+
+  trace('layout', 'relayout', {
+    ms: Math.round((performance.now() - relayoutStart) * 100) / 100,
+    dirty: dirty === 'all' ? 'all' : dirty ? `${dirty.from}-${dirty.to}` : 'none',
+    paragraphs: n,
+    lines: lines.length,
+    sections: sectionsOut.length,
+    images: view.images.length,
+    docHeight: Math.round(docHeight),
+  })
 
   const pageCount = Math.max(1, Math.ceil(docHeight / PAGE_HEIGHT))
   const visualHeight = pageCount * PAGE_HEIGHT + (pageCount - 1) * PAGE_GAP

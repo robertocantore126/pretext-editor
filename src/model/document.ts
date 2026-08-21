@@ -7,6 +7,7 @@
 // main.ts (frozen) reaches the model only through resetDocument.
 
 import type { BlockAttrs } from '../types/doc'
+import { trace } from '../debug/tracer'
 import { defaultBlockAttrs, doc } from '../state/doc'
 import { markAllDirty, markParagraphDirty } from './dirty'
 import { clearSelection } from './selection'
@@ -206,6 +207,16 @@ export function applyEdit(
     deletedAttrs,
     insertAttrs,
   }
+  trace('edit', 'applyEdit', {
+    para: p,
+    offset: o,
+    deleteCount,
+    inserted: insertText.length,
+    deleted: deletedText.length,
+    crossedBoundary,
+    paragraphs: paras.length,
+    cursor: { ...doc.cursor },
+  })
   notifyEdits(record)
   return record
 }

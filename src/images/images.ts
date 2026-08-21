@@ -2,6 +2,7 @@ import { docWrap, ghostInput } from '../dom'
 import { caretPixelPosition } from '../layout/caret-position'
 import { relayout, scheduleRelayout } from '../layout/engine'
 import { notifyChanged } from '../model/document'
+import { trace } from '../debug/tracer'
 import { draw } from '../render/draw'
 import { view } from '../state/view'
 import type { FloatImage } from '../types'
@@ -81,6 +82,7 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
       ? { id, img: imgEl, wrapper, x: placement.x, y: placement.y, w: placement.w, h: placement.h, loaded: false, objectUrl: src }
       : { id, img: imgEl, wrapper, x: 0, y: 0, w: 160, h: 160, loaded: false, objectUrl: src }
   view.images.push(rec)
+  trace('image', 'create', { id, placement: placement.kind, srcKind: src.slice(0, 5) })
   notifyChanged()
 
   imgEl.onload = () => {
@@ -254,6 +256,7 @@ export function deleteImage(id: string) {
   view.images[idx].wrapper.remove()
   view.images.splice(idx, 1)
   if (view.selectedImageId === id) view.selectedImageId = null
+  trace('image', 'delete', { id, remaining: view.images.length })
   notifyChanged()
   relayout()
 }

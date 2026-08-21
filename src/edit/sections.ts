@@ -24,6 +24,7 @@ import { PAD_Y } from '../config'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
 import { recordEdit } from './history'
+import { trace } from '../debug/tracer'
 import { repositionGhostInput } from './caret'
 
 /**
@@ -38,6 +39,7 @@ export function addSection(level: 0 | 1 = 0): string {
   const id = newSectionId()
   setSectionMark(index, { id, title: uniqueTitle(level === 1 ? 'Sottoscheda' : 'Scheda'), level })
   setCursor({ para: index, offset: 0 })
+  trace('section', 'add', { id, level, paraIndex: index, paragraphs: doc.paragraphs.length })
   relayout()
   goToSection(id)
   notifySections()
@@ -61,6 +63,7 @@ export function renameSection(id: string, title: string): void {
     setSectionMark(found.paraIndex, { id: found.id, title: clean, level: found.level })
   }
   relayout()
+  trace('section', 'rename', { id, title: clean })
   notifySections()
   notifyChanged()
 }
@@ -89,6 +92,7 @@ export function deleteSection(id: string): boolean {
     recordEdit(applyEdit(0, 0, Math.min(count, totalLength() - 0), ''))
   }
   relayout()
+  trace('section', 'delete', { id, start, end, paragraphs: doc.paragraphs.length })
   notifySections()
   notifyChanged()
   return true
@@ -105,6 +109,7 @@ export function goToSection(id: string): void {
   const entry = view.sections.find((s) => s.id === id)
   if (!entry) return
   docWrap.scrollTop = Math.max(0, PAD_Y + docToVisualY(entry.y) - 24)
+  trace('section', 'goto', { id, y: entry.y, scrollTop: Math.round(docWrap.scrollTop) })
   const found = findSection(id)
   if (found) setCursor({ para: found.paraIndex, offset: 0 })
   repositionGhostInput()

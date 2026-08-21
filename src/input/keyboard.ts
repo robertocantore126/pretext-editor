@@ -1,4 +1,5 @@
 import { ghostInput } from '../dom'
+import { trace } from '../debug/tracer'
 import { repositionGhostInput } from '../edit/caret'
 import { resetCaretBlink, stopCaretBlink } from '../render/caret'
 import { undo, redo } from '../edit/history'
@@ -66,6 +67,17 @@ export function initKeyboard() {
   })
 
   ghostInput.addEventListener('keydown', (e) => {
+    // The key's name only, never the character typed: the trace records which
+    // command ran, and the text is in the dump only if the reporter chose to
+    // include it (docs/DIAGNOSTICS.md).
+    if (e.key.length > 1 || e.ctrlKey || e.metaKey) {
+      trace('key', e.key, {
+        ctrl: e.ctrlKey || undefined,
+        shift: e.shiftKey || undefined,
+        composing: isComposing() || undefined,
+        cursor: { ...doc.cursor },
+      })
+    }
     if (view.selectedImageId && (e.key === 'Backspace' || e.key === 'Delete')) {
       e.preventDefault()
       deleteImage(view.selectedImageId)

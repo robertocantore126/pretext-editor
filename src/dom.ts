@@ -23,6 +23,7 @@ toolbar.innerHTML = `
   <button id="btn-export-json" type="button">Esporta JSON</button>
   <button id="btn-export-pdf" type="button">Esporta PDF</button>
   <button id="btn-import" type="button">Importa</button>
+  <button id="btn-trace" type="button" title="Scarica un JSON con gli ultimi eventi, per capire un problema">Diagnostica</button>
 `
 app.appendChild(toolbar)
 

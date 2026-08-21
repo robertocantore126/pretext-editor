@@ -8,6 +8,8 @@
 // tab panel needs an init point, so it gets one import and one call below.
 
 import { importInput } from './dom'
+import { downloadTrace, installTracer } from './debug/tracer'
+import { installStressHarness } from './debug/stress'
 import { initTabsPanel } from './ui/tabs-panel'
 import { initHistory } from './edit/history'
 import { applySelectionMark, toggleHeadlineForPara } from './edit/marks'
@@ -67,9 +69,17 @@ document.getElementById('btn-import')!.addEventListener('click', () => {
   importInput.click()
 })
 
+document.getElementById('btn-trace')!.addEventListener('click', () => {
+  downloadTrace()
+})
+
 // --------------------------------------------------------------------------
 // Input + window events
 // --------------------------------------------------------------------------
+
+// First, so it catches errors thrown by everything below (docs/DIAGNOSTICS.md).
+installTracer()
+installStressHarness()
 
 initImportInput()
 initKeyboard()
