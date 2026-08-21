@@ -131,6 +131,11 @@ export function addImageFromBlob(blob: Blob, x: number, y: number, w: number, h:
   createFloatImage(URL.createObjectURL(blob), { kind: 'fixed', x, y, w, h })
 }
 
+// RICH-TEXT-MODEL.md §12: cap on how large a remote image may be to import as
+// a local blob. Oversized images fall back to the live URL: display works,
+// persistence degrades — but a paste of a full web page stays bounded.
+const MAX_REMOTE_IMAGE_BYTES = 8 * 1024 * 1024
+
 /**
  * Adds an image from a URL string (remote or data:), auto-sized at the caret.
  * Used by the HTML importer (RICH-TEXT-MODEL.md §9). Remote URLs are fetched
@@ -145,10 +150,14 @@ export function addImageFromSrc(src: string) {
         if (!res.ok) throw new Error('fetch failed')
         return res.blob()
       })
-      .then((blob) => createFloatImage(URL.createObjectURL(blob), { kind: 'auto' }))
+      .then((blob) => {
+        if (blob.size > MAX_REMOTE_IMAGE_BYTES) throw new Error('image too large')
+        createFloatImage(URL.createObjectURL(blob), { kind: 'auto' })
+      })
       .catch(() => {
-        // CORS or network failure: fall back to showing the remote URL directly.
-        // Display works; persisting it may fail, but the paste still succeeds.
+        // CORS/network failure or size cap: fall back to showing the remote URL
+        // directly. Display works; persisting it may fail, but the paste still
+        // succeeds.
         createFloatImage(src, { kind: 'auto' })
       })
     return

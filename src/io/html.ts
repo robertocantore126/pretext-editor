@@ -7,6 +7,23 @@ export function escapeHtml(s: string) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+/**
+ * Mirrors layout/paragraph.ts: inter-word gaps are whitespace runs followed by
+ * a non-space character. Used to compute a justified line's painted width.
+ */
+function countInteriorGaps(text: string): number {
+  let count = 0
+  let inWs = false
+  for (let i = 0; i < text.length; i++) {
+    if (/[ \t\n\f\r]/.test(text[i])) inWs = true
+    else if (inWs) {
+      count++
+      inWs = false
+    }
+  }
+  return count
+}
+
 export async function exportHTML() {
   const imgs = await Promise.all(view.images.map(async (im) => ({ ...im, dataUrl: await convertImageToDataURL(im.img) })))
   const pageCount = Math.max(1, Math.ceil(view.docHeight / PAGE_HEIGHT))
@@ -27,7 +44,7 @@ export async function exportHTML() {
     for (const line of view.lines) {
       if (line.yTop < pageTop || line.yTop >= pageTop + PAGE_HEIGHT) continue
       const top = PAD_Y + (line.yTop - pageTop)
-      let left = PAD_X + line.x
+      const left = PAD_X + line.x + (line.justifyOffset || 0)
       // build inner HTML by runs
       let runs: string[] = []
       const globalStart = line.startOffset
@@ -46,7 +63,15 @@ export async function exportHTML() {
         if (inline.length > 0) segHtml = `<span style="${inline.join(';')}">${segHtml}</span>`
         runs.push(segHtml)
       }
-      pageInner += `<div class="line" style="left:${left}px;top:${top}px;font:${FONT};">${runs.join('')}</div>`
+      // Justified lines (RICH-TEXT-MODEL.md §7): the layout spread the words by
+      // justifyGap; here the div is given the painted width and text-align:justify
+      // lets the browser do the same spreading over the same width.
+      let lineStyle = `left:${left}px;top:${top}px;font:${FONT};`
+      if (line.justifyGap && line.justifyGap > 0) {
+        const paintedW = line.width + countInteriorGaps(line.text) * line.justifyGap
+        lineStyle += `width:${paintedW.toFixed(2)}px;text-align:justify;white-space:normal;`
+      }
+      pageInner += `<div class="line" style="${lineStyle}">${runs.join('')}</div>`
     }
     // images on page
     for (const im of imgs) {

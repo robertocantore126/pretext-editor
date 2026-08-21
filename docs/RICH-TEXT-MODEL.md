@@ -437,11 +437,17 @@ through with the decision taken.
 - ~~**Justification per slot** (§7)~~ — **decided**: each slot justifies independently;
   implemented in `layout/paragraph.ts` + `render/draw.ts`.
 - ~~**Remote images at paste time** (§9)~~ — **decided**: fetch-and-import as local blobs
-  at paste time, falling back to the live URL on CORS/network failure. Still open: a size
-  guard — a page full of images is a memory and network event.
+  at paste time, falling back to the live URL on CORS/network failure. Size guard
+  implemented too: images over 8 MB fall back to the live URL, and a single paste
+  imports at most 20 images (`images.ts`/`html-import.ts`).
 - ~~**Implementation order** (§10)~~ — **decided by construction**: model-first (interned
   styles + BlockAttrs, then the walker).
 - **Tables**: remain out of scope; they need the flat-array-to-tree change (§8).
+- **Export fidelity**: `io/html.ts` and `io/pdf.ts` now respect alignment and
+  justification (HTML via `text-align:justify` on the painted width; PDF via jsPDF's
+  built-in justify for single-run lines). Left as-is: list markers and indentation in
+  the exports, and multi-run justified lines in the PDF (they stay left-aligned to
+  avoid per-run collisions).
 - **Tables**: deferred to the block-tree change and decided separately (§8, §10).
 - **Ownership**: the feature spans both tracks. Model, importer, clipboard and persistence
   are A-owned (`model/`, `input/clipboard.ts`, `io/`). New painting (colour, background,

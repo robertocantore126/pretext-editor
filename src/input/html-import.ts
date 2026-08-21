@@ -21,6 +21,10 @@ import { defaultBlockAttrs, defaultStyle, doc } from '../state/doc'
 import { view } from '../state/view'
 import type { BlockAttrs, InlineStyle } from '../types/doc'
 
+// RICH-TEXT-MODEL.md §12: a page full of images is a memory and network event,
+// so a single paste imports at most this many images; the rest are dropped.
+const MAX_IMAGES_PER_PASTE = 20
+
 interface PendingBlock {
   text: string
   ids: number[]
@@ -266,7 +270,7 @@ function walk(nodes: Node[]): PendingBlock[] {
  */
 export function importHTML(html: string): void {
   const inert = new DOMParser().parseFromString(html, 'text/html')
-  const { srcs } = sanitize(inert)
+  const srcs = sanitize(inert).srcs.slice(0, MAX_IMAGES_PER_PASTE)
 
   const host = document.createElement('div')
   host.style.cssText = `position:fixed;left:-99999px;top:0;width:${view.docWidth || 800}px;visibility:hidden;`
