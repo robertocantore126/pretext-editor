@@ -98,6 +98,8 @@ export interface StressReport {
   }
   layout: { fullRelayoutMs: number[]; medianMs: number }
   typing: { where: string; medianMs: number; samples: number[] }[]
+  /** Enter and merging Backspace: the edits that change the paragraph count. */
+  structural: { where: string; medianMs: number; samples: number[] }[]
   paint: { scrollTop: number; drawMs: number }[]
   navigation: { toSectionMs: number[] }
   checks: {
@@ -241,6 +243,27 @@ export async function runStressBenchmark(): Promise<StressReport> {
     return { where, medianMs: median(samples), samples }
   })
 
+  // Structural edits: Enter and a merging Backspace. These change the paragraph
+  // *count*, which used to invalidate the whole document — the benchmark only
+  // typed characters, so it reported 1.2 ms while pressing Enter cost 500 ms in
+  // a real document. Measure the thing the user actually feels.
+  const structural = spots.map(({ where, para }) => {
+    const samples: number[] = []
+    for (let i = 0; i < 6; i++) {
+      const at = Math.min(doc.paragraphs[para].length, 5)
+      const t0 = performance.now()
+      applyEdit(para, at, 0, '\n')
+      relayout()
+      samples.push(Math.round((performance.now() - t0) * 100) / 100)
+      // Undo it by merging back, and time that too: it is the same class of edit.
+      const t1 = performance.now()
+      applyEdit(para, at, 1, '')
+      relayout()
+      samples.push(Math.round((performance.now() - t1) * 100) / 100)
+    }
+    return { where, medianMs: median(samples), samples }
+  })
+
   // Painting at three scroll positions: the canvas is viewport-sized, so this
   // must not grow with the document.
   const paint = [0, Math.floor(view.docHeight / 2), Math.max(0, view.docHeight - 800)].map((scrollTop) => {
@@ -280,6 +303,7 @@ export async function runStressBenchmark(): Promise<StressReport> {
     built,
     layout: { fullRelayoutMs: full, medianMs: median(full) },
     typing,
+    structural,
     paint,
     navigation: { toSectionMs: navigation },
     checks: {
@@ -303,6 +327,51 @@ export async function runStress(options: StressOptions = {}): Promise<StressRepo
   return report
 }
 
+
+/**
+ * Random editing, checked after every step. This is the guard for the
+ * index-keyed caches: splits and merges re-key paraCache, runCache and the
+ * paragraph versions, and a re-keying bug shows up as a paragraph rendering
+ * another one's lines — which no timing ever catches. After each edit every
+ * emitted line must still be a verbatim slice of the paragraph it claims.
+ */
+const NEWLINE = String.fromCharCode(10)
+
+export function runEditFuzz(steps = 300, seed = 3): { steps: number; failures: unknown[]; ms: number } {
+  const rand = mulberry32(seed)
+  const failures: unknown[] = []
+  const start = performance.now()
+  for (let step = 0; step < steps && failures.length < 5; step++) {
+    const para = Math.floor(rand() * doc.paragraphs.length)
+    const len = doc.paragraphs[para].length
+    const offset = Math.floor(rand() * (len + 1))
+    const roll = rand()
+    if (roll < 0.3) applyEdit(para, offset, 0, NEWLINE)                       // split
+    else if (roll < 0.55 && para + 1 < doc.paragraphs.length) applyEdit(para, len, 1, '')  // merge
+    else if (roll < 0.75) applyEdit(para, offset, 0, 'xyz')                 // type
+    else if (roll < 0.9) applyEdit(para, offset, Math.min(40, len - offset), '')  // delete a run
+    else applyEdit(para, offset, Math.min(80, len - offset), 'uno' + NEWLINE + 'due')    // replace across a split
+    relayout()
+    for (const line of view.lines) {
+      const source = doc.paragraphs[line.paraIndex]
+      if (source === undefined || source.slice(line.startOffset, line.endOffset) !== line.text) {
+        failures.push({
+          step,
+          paraIndex: line.paraIndex,
+          startOffset: line.startOffset,
+          endOffset: line.endOffset,
+          painted: line.text.slice(0, 50),
+          expected: (source ?? '(missing paragraph)').slice(line.startOffset, line.endOffset).slice(0, 50),
+        })
+        break
+      }
+    }
+  }
+  const result = { steps, failures, ms: Math.round(performance.now() - start) }
+  trace('mark', 'edit fuzz', result as unknown as Record<string, unknown>)
+  return result
+}
+
 export function installStressHarness(): void {
-  ;(window as any).pretextStress = { generate: generateStressDocument, benchmark: runStressBenchmark, run: runStress }
+  ;(window as any).pretextStress = { generate: generateStressDocument, benchmark: runStressBenchmark, run: runStress, fuzz: runEditFuzz }
 }

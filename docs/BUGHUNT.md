@@ -356,3 +356,19 @@ host with no CORS headers it makes the image fail to load outright, strictly wor
 - Acceptance: the three FIXPLAN.md snippets pass on a fresh load (offset coverage 30/30,
   caret reaches the end, whitespace-only layout ~0 ms, single-digit Enter samples, taint
   simulation warns + flags), and VERIFY.md §1 (both-sides wrap) still passes.
+
+---
+
+## Aggiornamento H1 (2026-08-22)
+
+Il fix H1 — `markAllDirty()` a ogni edit che attraversa un confine di paragrafo — era corretto
+e costava un re-fit completo del documento a **ogni Invio**: ~500 ms su 290 pagine, misurato
+dal trace di un utente (docs/DIAGNOSTICS.md).
+
+Sostituito da una re-indicizzazione precisa: `markParagraphsSpliced(at, removed, inserted)` in
+`model/dirty.ts` racconta a tutto ciò che è indicizzato per paragrafo esattamente quale splice
+è avvenuto, e `shiftCaches` in `layout/cache.ts` ri-chiava `paraCache` e `runCache` — comprese
+le `paraIndex` dentro le righe in cache, che è il punto in cui un fuzz di 400 passi ha trovato
+subito l'errore. Stessa garanzia di H1, senza rifare l'impaginazione dei paragrafi intatti:
+**4,5 ms** invece di 500. Il caso net-zero split/merge di H1 resta verificato: è una rimozione
+seguita da un inserimento, quindi il paragrafo che finisce a p+1 è visto come nuovo.

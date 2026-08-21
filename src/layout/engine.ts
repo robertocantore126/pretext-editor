@@ -10,9 +10,9 @@ import type { SectionLayout } from '../state/view'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
 import type { LineInfo } from '../types'
-import { takeDirty } from '../model/dirty'
+import { takeDirty, takeShifts } from '../model/dirty'
 import { styleVersion } from '../model/runs'
-import { paraCache } from './cache'
+import { paraCache, shiftCaches } from './cache'
 import { docToVisualY } from './pagination'
 import { layoutParagraph } from './paragraph'
 
@@ -62,6 +62,9 @@ function estimateHeight(paraIndex: number): number {
 export function relayout() {
   const relayoutStart = performance.now()
   const dirty = takeDirty()
+  // Paragraph indices moved since the last pass: re-key the caches the same way
+  // the model re-keyed its versions, in the order the splices happened.
+  for (const shift of takeShifts()) shiftCaches(shift.at, shift.removed, shift.inserted)
   const cssWidth = docWrap.clientWidth || 800
   const docWidth = Math.max(80, cssWidth - PAD_X * 2)
   view.docWidth = docWidth

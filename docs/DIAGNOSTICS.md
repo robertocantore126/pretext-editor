@@ -78,6 +78,19 @@ dell'invariante degli offset, schede che non cominciano a inizio pagina, righe d
 finite nella pagina della successiva. Una corsa veloce che dà risposte sbagliate è peggio di
 una lenta.
 
+### Il fuzz
+
+```js
+pretextStress.fuzz(400, 5)   // passi, seed
+```
+
+Modifiche casuali — split, merge, digitazione, cancellazioni, sostituzioni a cavallo di un
+a-capo — e dopo **ogni** passo verifica che ogni riga emessa sia ancora una fetta letterale
+del paragrafo che dichiara. È la guardia delle cache indicizzate per paragrafo: un errore di
+re-indicizzazione si manifesta come un paragrafo che dipinge il testo di un altro, e nessun
+cronometro lo vede. Ha trovato esattamente questo al primo passo, il giorno in cui è stato
+scritto.
+
 ### Misure di riferimento (2026-08-21, 200 pagine richieste, 40 immagini, 8 schede)
 
 | | |
@@ -86,6 +99,7 @@ una lenta.
 | Costruzione | 2,9 s (di cui 671 ms il primo layout) |
 | Layout completo | 599 / 608 / 628 ms |
 | Digitazione | mediana **1,2 ms** all'inizio, 1,3 a metà, 1,6 alla fine |
+| Invio / Backspace che unisce | mediana **4,5 ms** all'inizio, 5,3 a metà, 1,8 alla fine |
 | Disegno | 0,4–0,6 ms a qualsiasi altezza |
 | Salto a una scheda | 0,3–1,1 ms |
 | Memoria | 71 MB |
@@ -99,3 +113,10 @@ ridimensionamento della finestra, non mentre si scrive.
 
 Il primo tasto battuto costa 45 ms invece di 1,2: è la cache fredda del paragrafo toccato.
 Visibile solo una volta, ma è lì.
+
+**Il banco aveva un punto cieco, ed è costato caro.** Fino al 2026-08-22 misurava solo la
+digitazione di caratteri, che non cambia il numero di paragrafi. Premere Invio invece lo
+cambia, e questo invalidava l'intero documento: **~500 ms a ogni a-capo** in un documento di
+290 pagine, mentre il banco riportava 1,2 ms e sembrava tutto a posto. L'ha scoperto un trace
+di un utente, non il test. Da qui la riga `structural` qui sopra: se una misura non tocca il
+percorso che l'utente sente, non sta misurando niente.

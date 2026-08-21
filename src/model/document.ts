@@ -9,7 +9,7 @@
 import type { BlockAttrs } from '../types/doc'
 import { trace } from '../debug/tracer'
 import { defaultBlockAttrs, doc } from '../state/doc'
-import { markAllDirty, markParagraphDirty } from './dirty'
+import { markAllDirty, markParagraphDirty, markParagraphsSpliced } from './dirty'
 import { clearSelection } from './selection'
 import { resetStyleTable } from './styles'
 
@@ -84,7 +84,6 @@ export function applyEdit(
   const attrs = doc.blockAttrs
   const p = Math.max(0, Math.min(paraIndex, paras.length - 1))
   const o = Math.max(0, Math.min(offset, paras[p].length))
-  const parasBefore = paras.length
   // Style inherited by newly inserted text: the id at the insertion point (the
   // first char of a replaced selection, if any), else the last char of the
   // paragraph. Captured before the delete phase so typing over a styled
@@ -107,9 +106,13 @@ export function applyEdit(
   let curOff = o
   // BUGHUNT H1: an edit that crosses a paragraph boundary re-indexes the
   // paragraphs below it even when the net count is unchanged (a delete spanning
-  // one boundary + an insert with one '\n'); the layout caches are keyed by
-  // index, so only markAllDirty() keeps the tail from rendering stale content.
+  // one boundary + an insert with one '\n'), and the layout caches are keyed by
+  // index. That used to be answered with markAllDirty(); it is now answered by
+  // telling everyone keyed by index exactly which splice happened, which is the
+  // same guarantee without re-fitting the whole document (see the splice calls
+  // at the end of this function).
   let crossedBoundary = false
+  let boundariesConsumed = 0
   while (remaining > 0 && cur < paras.length) {
     const text = paras[cur]
     const ids = styles[cur]
@@ -126,6 +129,7 @@ export function applyEdit(
     if (cur >= paras.length - 1) break
     // Consume the paragraph boundary: merge the next paragraph into this one.
     crossedBoundary = true
+    boundariesConsumed++
     deletedText += '\n'
     remaining -= 1
     const curLen = paras[cur].length
@@ -193,8 +197,15 @@ export function applyEdit(
   doc.cursor = { para: p + n - 1, offset: o + parts[n - 1].length }
   clearSelection()
 
-  if (paras.length !== parasBefore || crossedBoundary || insertText.includes('\n')) markAllDirty()
-  else markParagraphDirty(p)
+  // Tell every index-keyed structure what moved, in the order it moved: the
+  // delete phase merged `boundariesConsumed` paragraphs away at p+1, then the
+  // insert phase created n-1 there. A net-zero split/merge (BUGHUNT H1) is a
+  // remove followed by an insert, so the paragraph that ends up at p+1 is
+  // correctly seen as new rather than as the old one.
+  if (boundariesConsumed > 0) markParagraphsSpliced(p + 1, boundariesConsumed, 0)
+  if (n > 1) markParagraphsSpliced(p + 1, 0, n - 1)
+  markParagraphDirty(p)
+  if (n > 1) markParagraphDirty(p + n - 1)
 
   const record: EditRecord = {
     paraIndex: p,
