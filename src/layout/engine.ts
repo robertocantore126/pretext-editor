@@ -167,9 +167,18 @@ export function relayout() {
       lines.push(...paraLines)
       paraCache[i] = { version, docWidth, yStart: y, page, obstructionKey: key, lines: paraLines, height }
     } else if (cached.yStart !== y) {
-      // Position-independent: translate instead of re-fitting.
+      // Position-independent: translate instead of re-fitting. The cached lines
+      // move *in place*. Cloning them at the new y while leaving the entry's own
+      // lines at the old one recorded a yStart that its lines did not agree
+      // with, so the next pass — which sees yStart === y and reuses them
+      // verbatim — painted the paragraph back at its old position, on top of
+      // whatever now lives there. Moving in place also drops one allocation per
+      // line per edit.
       const dy = y - cached.yStart
-      for (const l of cached.lines) lines.push({ ...l, yTop: l.yTop + dy })
+      for (const l of cached.lines) {
+        l.yTop += dy
+        lines.push(l)
+      }
       cached.yStart = y
     } else {
       for (const l of cached.lines) lines.push(l)

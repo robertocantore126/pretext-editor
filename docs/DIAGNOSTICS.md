@@ -85,11 +85,17 @@ pretextStress.fuzz(400, 5)   // passi, seed
 ```
 
 Modifiche casuali — split, merge, digitazione, cancellazioni, sostituzioni a cavallo di un
-a-capo — e dopo **ogni** passo verifica che ogni riga emessa sia ancora una fetta letterale
-del paragrafo che dichiara. È la guardia delle cache indicizzate per paragrafo: un errore di
+a-capo — e dopo **ogni** passo due controlli, con due impaginazioni di fila perche' una
+posizione in cache sbagliata si vede solo alla seconda:
+
+- ogni riga emessa e' ancora una fetta letterale del paragrafo che dichiara (il testo giusto);
+- i paragrafi restano impilati, cioe' la cima di uno non sta mai sopra il fondo del
+  precedente (il **posto** giusto). È la guardia delle cache indicizzate per paragrafo: un errore di
 re-indicizzazione si manifesta come un paragrafo che dipinge il testo di un altro, e nessun
 cronometro lo vede. Ha trovato esattamente questo al primo passo, il giorno in cui è stato
-scritto.
+scritto — ma solo sul testo: il controllo geometrico è arrivato dopo, quando uno screenshot
+di un utente ha mostrato paragrafi dipinti uno sopra l'altro che il fuzz lasciava passare
+perché guardava solo *cosa* c'era scritto, mai *dove*.
 
 ### Misure di riferimento (2026-08-21, 200 pagine richieste, 40 immagini, 8 schede)
 

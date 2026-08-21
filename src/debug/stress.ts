@@ -106,6 +106,7 @@ export interface StressReport {
     offsetInvariantViolations: number
     sectionsNotOnPageBoundary: string[]
     linesSpillingAcrossSections: number
+    overlappingParagraphs: number
   }
   memoryMB?: number
 }
@@ -310,6 +311,7 @@ export async function runStressBenchmark(): Promise<StressReport> {
       offsetInvariantViolations: violations,
       sectionsNotOnPageBoundary: notOnBoundary,
       linesSpillingAcrossSections: spill,
+      overlappingParagraphs: overlappingParagraphs().length,
     },
     memoryMB: (performance as any).memory
       ? Math.round((performance as any).memory.usedJSHeapSize / 1048576)
@@ -335,6 +337,37 @@ export async function runStress(options: StressOptions = {}): Promise<StressRepo
  * another one's lines — which no timing ever catches. After each edit every
  * emitted line must still be a verbatim slice of the paragraph it claims.
  */
+
+/**
+ * Paragraphs must stack down the page: the top of paragraph i+1 is never above
+ * the bottom of paragraph i. The offset check catches a paragraph painting the
+ * *text* of another; this catches it painting in the *place* of another, which
+ * is what a stale cached position looks like on screen — two paragraphs on top
+ * of each other. Different failure, same class, and no timing sees either.
+ */
+export function overlappingParagraphs(): Array<{ paraIndex: number; top: number; previousBottom: number }> {
+  const bands = new Map<number, { min: number; max: number }>()
+  for (const line of view.lines) {
+    const band = bands.get(line.paraIndex)
+    const bottom = line.yTop + (line.height || 0)
+    if (!band) bands.set(line.paraIndex, { min: line.yTop, max: bottom })
+    else {
+      band.min = Math.min(band.min, line.yTop)
+      band.max = Math.max(band.max, bottom)
+    }
+  }
+  const indices = [...bands.keys()].sort((a, b) => a - b)
+  const out: Array<{ paraIndex: number; top: number; previousBottom: number }> = []
+  for (let i = 1; i < indices.length; i++) {
+    const previous = bands.get(indices[i - 1])!
+    const current = bands.get(indices[i])!
+    if (current.min < previous.max - 0.5) {
+      out.push({ paraIndex: indices[i], top: current.min, previousBottom: previous.max })
+    }
+  }
+  return out
+}
+
 const NEWLINE = String.fromCharCode(10)
 
 export function runEditFuzz(steps = 300, seed = 3): { steps: number; failures: unknown[]; ms: number } {
@@ -352,6 +385,11 @@ export function runEditFuzz(steps = 300, seed = 3): { steps: number; failures: u
     else if (roll < 0.9) applyEdit(para, offset, Math.min(40, len - offset), '')  // delete a run
     else applyEdit(para, offset, Math.min(80, len - offset), 'uno' + NEWLINE + 'due')    // replace across a split
     relayout()
+    // Twice: a stale cached position only shows on the *second* pass, when the
+    // entry is reused verbatim at a y it no longer agrees with.
+    relayout()
+    const overlaps = overlappingParagraphs()
+    if (overlaps.length > 0) failures.push({ step, kind: 'overlap', ...overlaps[0], count: overlaps.length })
     for (const line of view.lines) {
       const source = doc.paragraphs[line.paraIndex]
       if (source === undefined || source.slice(line.startOffset, line.endOffset) !== line.text) {
