@@ -54,9 +54,30 @@ function px(v: string): number {
   return Number.isFinite(n) ? n : 0
 }
 
+/**
+ * The element's own background, or null when it must not become a text
+ * highlight. Transparent is null; so is page chrome — colours that are
+ * near-achromatic AND near-white or near-black, the classic page and box
+ * backgrounds (Wikipedia's #fdfdfd navbox, #f8f9fa boxes, dark-mode #1f1f23,
+ * Word's #d9d9d9 shading). Without this, pasting from Wikipedia painted every
+ * character with the page's white: the walker accumulates the first
+ * non-transparent ancestor background and applies it to the whole subtree.
+ * Genuine highlights are coloured and keep their saturation, so they survive
+ * (a yellow <mark>, the nested red-on-yellow of VERIFY.md §8.3).
+ */
 function ownBackground(cs: CSSStyleDeclaration): string | null {
   const bg = cs.backgroundColor
-  return bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent' ? null : bg
+  if (bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') return null
+  const m = bg.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)/)
+  if (m) {
+    const r = +m[1]
+    const g = +m[2]
+    const b = +m[3]
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    if (max - min <= 24 && (max > 200 || max < 70)) return null
+  }
+  return bg
 }
 
 /** The accumulated character style for text inside `el`. */

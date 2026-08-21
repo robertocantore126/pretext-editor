@@ -98,6 +98,16 @@ reports `rgba(0, 0, 0, 0)`.
 Carry both on the walker's context stack (§6.4). They are the only two exceptions; do not
 generalise the workaround to other properties.
 
+One deliberate filter sits on `background-color`: **page chrome is not a highlight.** The
+walker accumulates the first non-transparent ancestor background and applies it to the
+whole subtree, so without a filter, pasting from Wikipedia painted every character with
+the page's white (`#fff`, `#fdfdfd` navboxes, `#f8f9fa` boxes, dark-mode `#1f1f23`, Word's
+`#d9d9d9` shading). `ownBackground` (in `input/html-import.ts`) therefore returns null for
+colours that are near-achromatic *and* near-white or near-black — the classic page/box
+backgrounds — while coloured highlights (a yellow `<mark>`, the nested red-on-yellow of
+VERIFY.md §8.3) keep their saturation and survive. This is a loss only for
+indistinguishable-from-chrome backgrounds; see §8.
+
 ## 4. The model
 
 ### 4.1 Inline style, interned
@@ -384,6 +394,7 @@ Written down so losses are deliberate, per the contract in §1.
 | **Float, `position: absolute`, multi-column** | Flattened into normal flow, in document order. |
 | **Nested lists deeper than the model** | `level` is preserved as a number; rendering clamps the indent. |
 | **CSS transforms, shadows, gradients** | Dropped. |
+| **Page/box backgrounds — near-achromatic and near-white/near-black** (`#fff`, `#fdfdfd`, `#f8f9fa`, dark-mode `#1f1f23`, Word shading `#d9d9d9`) | Dropped as page chrome (`ownBackground`, §3): a pasted page must not paint its own canvas on every character. Coloured backgrounds (highlights) are preserved. |
 | **Fonts not installed locally** | The stack is preserved verbatim; the browser substitutes at render time, as it would anywhere. |
 | **Images** | Imported as floating boxes via the existing image system (§6.4); never inline, never in the text flow. |
 | **Everything else in §4** | Must survive. A loss here is a bug, not a degradation. |
