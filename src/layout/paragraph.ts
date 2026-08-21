@@ -7,7 +7,8 @@ import {
   PAGE_HEIGHT,
 } from '../config'
 import { measureCtx } from '../dom'
-import { fontForStyle, getStyleRuns, hasHeadlineInRange } from '../model/runs'
+import { fontForStyle, getStyleRuns, styleFontSize } from '../model/runs'
+import { defaultBlockAttrs, doc } from '../state/doc'
 import type { LineInfo } from '../types'
 import type { CharRun } from '../types/layout'
 import { runCache } from './cache'
@@ -18,8 +19,11 @@ import { computeLineSlots } from './slots'
 // come from the interned style table (Contract 1); the cursor threads across
 // slots so both-sides wrap keeps working. Each fragment becomes its own
 // LineInfo, which is what the renderer, caret and exporters already consume.
-
-const MAX_LINE_HEIGHT = Math.round(FONT_SIZE * 1.6 * 1.4)
+//
+// Paragraph attributes (RICH-TEXT-MODEL.md §4.2) are slot geometry and y
+// arithmetic: alignment shifts an already-broken line inside its slot, indents
+// narrow the region the slots may occupy, space-before/after are y offsets, and
+// the line height follows the tallest run font. pretext never sees any of it.
 
 function computeRuns(text: string, paraIndex: number): CharRun[] {
   const runs: CharRun[] = []
@@ -53,15 +57,48 @@ function pushPastPageBoundary(y: number, lineH: number): number {
   return y
 }
 
+/** Clip a slot to the paragraph's text region. */
+function regionSlot(
+  slot: { x: number; width: number },
+  left: number,
+  right: number
+): { x: number; width: number } | null {
+  const a = Math.max(slot.x, left)
+  const b = Math.min(slot.x + slot.width, right)
+  if (b - a < MIN_LINE_WIDTH) return null
+  return { x: a, width: b - a }
+}
+
 export function layoutParagraph(text: string, docWidth: number, startY: number, paraIndex: number): { lines: LineInfo[]; height: number } {
+  const attrs = doc.blockAttrs[paraIndex] ?? defaultBlockAttrs()
+  const leftIndent = Math.max(0, attrs.indentLeft)
+  const rightIndent = Math.max(0, attrs.indentRight)
+  const regionRight = docWidth - rightIndent
+  const y0 = startY + attrs.spaceBefore
   const lines: LineInfo[] = []
+  let y = y0
+
+  const runs = text.length === 0 ? [] : computeRuns(text, paraIndex)
+
+  // Line height follows the tallest run font (imported headings carry their own
+  // computed size); a paragraph-level lineHeight overrides it.
+  let maxRunSize = FONT_SIZE
+  for (const r of runs) maxRunSize = Math.max(maxRunSize, styleFontSize(r.style))
+  const lineH = attrs.lineHeight ?? Math.max(LINE_HEIGHT, Math.round(maxRunSize * 1.4))
 
   if (text.length === 0) {
-    lines.push({ paraIndex, text: '', x: 0, yTop: startY, width: docWidth, startOffset: 0, endOffset: 0, height: LINE_HEIGHT })
-    return { lines, height: LINE_HEIGHT }
+    lines.push({
+      paraIndex,
+      text: '',
+      x: leftIndent,
+      yTop: y0,
+      width: Math.max(0, regionRight - leftIndent),
+      startOffset: 0,
+      endOffset: 0,
+      height: lineH,
+    })
+    return { lines, height: lineH + attrs.spaceBefore + attrs.spaceAfter }
   }
-
-  const runs = computeRuns(text, paraIndex)
 
   // Rich-inline items mirror the style runs. Pretext collapses collapsible
   // whitespace at item edges into gapBefore, so we track each item's document
@@ -81,25 +118,33 @@ export function layoutParagraph(text: string, docWidth: number, startY: number, 
   // How much of each item's trimmed text has already been emitted as fragments.
   const consumedInItem: number[] = itemMeta.map(() => 0)
 
+  // Alignment is applied to an already-broken line inside its slot; justify is
+  // a paint-time pass over gapBefore/occupiedWidth (RICH-TEXT-MODEL.md §7) and
+  // is not implemented yet — it renders as left.
+  const alignFactor = attrs.align === 'center' ? 0.5 : attrs.align === 'right' ? 1 : 0
+
   let cursor: RichInlineCursor | undefined
   let pos = 0
-  let y = startY
+  let firstBand = true
   while (pos < text.length) {
-    const upcomingHasHeadline = hasHeadlineInRange(paraIndex, pos, pos + 41)
-    const lineH = upcomingHasHeadline ? MAX_LINE_HEIGHT : LINE_HEIGHT
     const lineY = pushPastPageBoundary(y, lineH)
     const slots = computeLineSlots(lineY, lineH, docWidth)
-    if (slots.every((s) => s.width < MIN_LINE_WIDTH)) {
+    const regionSlots = slots
+      .map((s) => regionSlot(s, leftIndent + (firstBand ? attrs.indentFirstLine : 0), regionRight))
+      .filter((s): s is { x: number; width: number } => s !== null)
+    if (regionSlots.length === 0) {
       y += 6
       continue
     }
     let placed = false
-    for (const slot of slots) {
+    for (const slot of regionSlots) {
       const range = layoutNextRichInlineLineRange(prepared, slot.width, cursor)
       if (!range) continue
       const mat = materializeRichInlineLineRange(prepared, range)
       cursor = range.end
-      let x = slot.x
+      // Shift the whole broken line inside its slot for center/right alignment.
+      const shift = (slot.width - mat.width) * alignFactor
+      let x = slot.x + shift
       for (const frag of mat.fragments) {
         x += frag.gapBefore
         const meta = itemMeta[frag.itemIndex]
@@ -128,7 +173,7 @@ export function layoutParagraph(text: string, docWidth: number, startY: number, 
       // remaining text is collapsible whitespace the flow is exhausted - the
       // fragment texts never carry it (pretext trims it), so stop.
       if (cursor && cursor.itemIndex >= nonEmptyItemCount) break
-      if (y - startY > 1e7) break // defensive: never spin forever
+      if (y - y0 > 1e7) break // defensive: never spin forever
       y += 6
       continue
     }
@@ -137,12 +182,13 @@ export function layoutParagraph(text: string, docWidth: number, startY: number, 
     // lineH to the pre-push y loses it, and the engine then starts the next
     // paragraph on top of this line.
     y = lineY + lineH
+    firstBand = false
   }
 
   if (lines.length === 0) {
-    lines.push({ paraIndex, text: '', x: 0, yTop: startY, width: docWidth, startOffset: 0, endOffset: 0, height: LINE_HEIGHT })
-    y = startY + LINE_HEIGHT
+    lines.push({ paraIndex, text: '', x: leftIndent, yTop: y0, width: Math.max(0, regionRight - leftIndent), startOffset: 0, endOffset: 0, height: lineH })
+    y = y0 + lineH
   }
 
-  return { lines, height: y - startY }
+  return { lines, height: y - y0 + attrs.spaceAfter }
 }

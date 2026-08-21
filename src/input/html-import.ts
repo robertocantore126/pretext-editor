@@ -39,6 +39,8 @@ interface WalkContext {
   whiteSpace: 'normal' | 'pre'
   linkHref: string | null
   listStack: ListFrame[]
+  /** Accumulated indentation of the enclosing <ul>/<ol> containers. */
+  listIndent: number
 }
 
 const isCollapsible = (ch: string) => ch === ' ' || ch === '\t' || ch === '\n' || ch === '\f' || ch === '\r'
@@ -100,6 +102,9 @@ function blockAttrsFromElement(el: HTMLElement, cs: CSSStyleDeclaration, ctx: Wa
       level: ctx.listStack.length,
       marker: top.type === 'bullet' ? '•' : String(top.counter) + '.',
     }
+    // The li itself has no margin; the indent lives on the enclosing list's
+    // padding-inline-start, which the browser default puts at 40px.
+    attrs.indentLeft += ctx.listIndent
   }
   return attrs
 }
@@ -212,9 +217,12 @@ function walk(nodes: Node[]): PendingBlock[] {
       whiteSpace: cs.whiteSpace === 'pre' || cs.whiteSpace === 'pre-wrap' ? 'pre' : 'normal',
       linkHref: tag === 'a' ? el.getAttribute('href') || ctx.linkHref : ctx.linkHref,
       listStack: ctx.listStack.slice(),
+      listIndent: ctx.listIndent,
     }
-    if (tag === 'ul') childCtx.listStack.push({ type: 'bullet', counter: 0 })
-    else if (tag === 'ol') childCtx.listStack.push({ type: 'number', counter: 0 })
+    if (tag === 'ul' || tag === 'ol') {
+      childCtx.listStack.push({ type: tag === 'ul' ? 'bullet' : 'number', counter: 0 })
+      childCtx.listIndent += px(cs.paddingLeft) + px(cs.marginLeft)
+    }
     else if (tag === 'li' && childCtx.listStack.length > 0) {
       const top = childCtx.listStack[childCtx.listStack.length - 1]
       if (top.type === 'number') top.counter++
@@ -238,6 +246,7 @@ function walk(nodes: Node[]): PendingBlock[] {
     whiteSpace: 'normal',
     linkHref: null,
     listStack: [],
+    listIndent: 0,
   }
   for (const child of nodes) visit(child, rootCtx)
   closeBlock()

@@ -116,6 +116,15 @@ export function draw() {
     const line = lines[li]
     if (lineVisualTop(line) > viewBottom) break
     if (!line.text) continue
+    // List markers live in the indent gutter of the first line (RICH-TEXT-MODEL.md §4.2).
+    const bAttrs = doc.blockAttrs[line.paraIndex]
+    if (line.startOffset === 0 && bAttrs?.kind === 'listItem' && bAttrs.list?.marker) {
+      ctx.font = FONT
+      const markerW = measureCtx.measureText(bAttrs.list.marker).width
+      const markerY = PAD_Y + docToVisualY(line.yTop) + (line.height || LINE_HEIGHT) * 0.76
+      ctx.fillStyle = INK
+      ctx.fillText(bAttrs.list.marker, PAD_X + line.x - markerW - 10, markerY)
+    }
     let xPos = PAD_X + line.x
     const globalStart = line.startOffset
     const lineTopY = PAD_Y + docToVisualY(line.yTop)
