@@ -377,6 +377,7 @@ Written down so losses are deliberate, per the contract in §1.
 | --- | --- |
 | **Tables** | Not representable while blocks are a flat array. Each cell becomes its own block, in document order; the grid is lost. Requires the block-tree change to fix. |
 | **`<br>`** | Splits the block. Visually equivalent until paragraph spacing differs from line spacing. |
+| **`<pre>` internal newlines** | Lines become separate blocks (each still `whiteSpace:'pre'`); multi-space runs inside a line are preserved verbatim. |
 | **Float, `position: absolute`, multi-column** | Flattened into normal flow, in document order. |
 | **Nested lists deeper than the model** | `level` is preserved as a number; rendering clamps the indent. |
 | **CSS transforms, shadows, gradients** | Dropped. |

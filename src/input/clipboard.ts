@@ -10,6 +10,7 @@
 
 import { repositionGhostInput } from '../edit/caret'
 import { recordEdit } from '../edit/history'
+import { importHTML } from './html-import'
 import { relayout } from '../layout/engine'
 import { draw } from '../render/draw'
 import { applyEdit, selectionDeleteSpec } from '../model/document'
@@ -134,6 +135,14 @@ export function initClipboard(): void {
       } catch {
         // fall through to plain text
       }
+    }
+    // Foreign rich content: HTML -> rich-text model (RICH-TEXT-MODEL.md §6),
+    // falling back to plain text when the clipboard carries no markup.
+    const html = cd.getData('text/html')
+    if (html) {
+      e.preventDefault()
+      importHTML(html)
+      return
     }
     const text = cd.getData('text/plain')
     if (text) {

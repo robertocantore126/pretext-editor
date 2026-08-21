@@ -131,6 +131,11 @@ export function addImageFromBlob(blob: Blob, x: number, y: number, w: number, h:
   createFloatImage(URL.createObjectURL(blob), { kind: 'fixed', x, y, w, h })
 }
 
+/** Adds an image from a URL string (remote or data:), auto-sized at the caret. Used by the HTML importer. */
+export function addImageFromSrc(src: string) {
+  createFloatImage(src, { kind: 'auto' })
+}
+
 /**
  * Serializes every floating image for persistence (handoff A -> B, blocks A5):
  * geometry plus the image bytes as a Blob, so IndexedDB can store them without
