@@ -1,10 +1,9 @@
-import { PAD_X, PAD_Y } from '../config'
 import { docWrap, ghostInput } from '../dom'
 import { repositionGhostInput } from '../edit/caret'
 import { resetCaretBlink } from '../render/caret'
 import { addImageFromFile, deselectImage } from '../images/images'
 import { pixelToCursor, resetStickyX } from '../layout/caret-position'
-import { visualToDocY } from '../layout/pagination'
+import { pointerToDocument } from '../layout/coords'
 import { draw } from '../render/draw'
 import { sectionTitleAt, startTitleRename } from '../render/title'
 import {
@@ -20,15 +19,11 @@ export function initPointer() {
 
   docWrap.addEventListener('mousedown', (e) => {
     if ((e.target as HTMLElement).closest('.img-handle')) return
-    const rect = docWrap.getBoundingClientRect()
-    const px = e.clientX - rect.left - PAD_X
-    // B4: the document scrolls inside .doc-wrap, so client offsets become
-    // document offsets only after adding the current scrollTop.
-    const py = docWrap.scrollTop + (e.clientY - rect.top) - PAD_Y
+    const { x: px, y: py } = pointerToDocument(e.clientX, e.clientY)
     // A title band belongs to the tab, not to the text: clicking it renames the
     // tab in place instead of putting the caret in the paragraph below
     // (docs/TABS.md).
-    const titleHit = sectionTitleAt(visualToDocY(py))
+    const titleHit = sectionTitleAt(py)
     if (titleHit) {
       deselectImage()
       startTitleRename(titleHit)
@@ -49,10 +44,8 @@ export function initPointer() {
     draw()
     const onMove = (ev: MouseEvent) => {
       if (!view.selectingText) return
-      const r = docWrap.getBoundingClientRect()
-      const mx = ev.clientX - r.left - PAD_X
-      const my = docWrap.scrollTop + (ev.clientY - r.top) - PAD_Y
-      setSelection(c, pixelToCursor(mx, my))
+      const m = pointerToDocument(ev.clientX, ev.clientY)
+      setSelection(c, pixelToCursor(m.x, m.y))
       draw()
     }
     const onUp = (ev: MouseEvent) => {
@@ -80,9 +73,10 @@ export function initPointer() {
   docWrap.addEventListener('drop', (e) => {
     e.preventDefault()
     docWrap.classList.remove('dropzone-active')
-    const rect = docWrap.getBoundingClientRect()
-    const dropX = e.clientX - rect.left - PAD_X
-    const dropY = docWrap.scrollTop + (e.clientY - rect.top) - PAD_Y
+    // Images are stored in document Y. Dropping used to pass a visual Y, so the
+    // image landed lower by the page gaps above the drop point — pages later,
+    // deep in a long document.
+    const { x: dropX, y: dropY } = pointerToDocument(e.clientX, e.clientY)
     const files = e.dataTransfer?.files
     if (!files) return
     Array.from(files)

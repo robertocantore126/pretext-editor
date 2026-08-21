@@ -24,5 +24,11 @@ export const view = {
   focused: false,
   caretVisible: true,
   selectingText: false,
-  dragging: null as null | { id: string; mode: 'move' | 'resize'; startX: number; startY: number; origX: number; origY: number; origW: number; origH: number; aspect: number },
+  /**
+   * A drag in flight. startX/startY are client pixels (the resize needs a plain
+   * delta); grabX/grabY are the same point in *document* coordinates, which is
+   * what a move needs — adding a client delta to a document Y drifts by
+   * PAGE_GAP for every page boundary the pointer crosses (layout/coords.ts).
+   */
+  dragging: null as null | { id: string; mode: 'move' | 'resize'; startX: number; startY: number; grabX: number; grabY: number; origX: number; origY: number; origW: number; origH: number; aspect: number },
 }

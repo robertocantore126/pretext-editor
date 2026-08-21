@@ -90,7 +90,13 @@ posizione in cache sbagliata si vede solo alla seconda:
 
 - ogni riga emessa e' ancora una fetta letterale del paragrafo che dichiara (il testo giusto);
 - i paragrafi restano impilati, cioe' la cima di uno non sta mai sopra il fondo del
-  precedente (il **posto** giusto). È la guardia delle cache indicizzate per paragrafo: un errore di
+  precedente (il **posto** giusto).
+
+Il banco ha anche `checkHitTesting()`: clicca dove ogni riga e' dipinta — sulla riga e nel
+vuoto tra un paragrafo e l'altro — e pretende che il cursore atterri li'. Passa dalla stessa
+conversione del mouse (`layout/coords.ts`), quindi prova la strada vera. Serve perche' la Y
+del documento e quella visiva coincidono in cima e divergono di PAGE_GAP per ogni pagina piu'
+sotto: uno scambio di unita' e' invisibile a pagina uno e ti teletrasporta a pagina cinquanta. È la guardia delle cache indicizzate per paragrafo: un errore di
 re-indicizzazione si manifesta come un paragrafo che dipinge il testo di un altro, e nessun
 cronometro lo vede. Ha trovato esattamente questo al primo passo, il giorno in cui è stato
 scritto — ma solo sul testo: il controllo geometrico è arrivato dopo, quando uno screenshot

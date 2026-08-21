@@ -1,5 +1,6 @@
 import { docWrap, ghostInput } from '../dom'
 import { caretPixelPosition } from '../layout/caret-position'
+import { pointerToDocument } from '../layout/coords'
 import { relayout, scheduleRelayout } from '../layout/engine'
 import { notifyChanged } from '../model/document'
 import { trace } from '../debug/tracer'
@@ -123,11 +124,14 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
   const beginDrag = (e: MouseEvent, mode: 'move' | 'resize') => {
     e.stopPropagation()
     selectImage(id)
+    const grab = pointerToDocument(e.clientX, e.clientY)
     view.dragging = {
       id,
       mode,
       startX: e.clientX,
       startY: e.clientY,
+      grabX: grab.x,
+      grabY: grab.y,
       origX: rec.x,
       origY: rec.y,
       origW: rec.w,
@@ -338,10 +342,13 @@ export function initImageInteractions() {
     const rec = view.images.find((i) => i.id === d.id)
     if (!rec) return
     const dx = e.clientX - d.startX
-    const dy = e.clientY - d.startY
     if (d.mode === 'move') {
-      rec.x = Math.max(0, Math.min(view.docWidth - rec.w, d.origX + dx))
-      rec.y = Math.max(0, d.origY + dy)
+      // Move in document space: the pointer's document position minus where it
+      // grabbed the image. A client-pixel delta would slide the image by an
+      // extra PAGE_GAP each time the drag crosses a page boundary.
+      const now = pointerToDocument(e.clientX, e.clientY)
+      rec.x = Math.max(0, Math.min(view.docWidth - rec.w, d.origX + (now.x - d.grabX)))
+      rec.y = Math.max(0, d.origY + (now.y - d.grabY))
     } else {
       const newW = Math.max(40, d.origW + dx)
       rec.w = Math.round(newW)

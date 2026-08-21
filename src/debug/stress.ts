@@ -22,6 +22,10 @@ import { draw } from '../render/draw'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
 import { docWrap } from '../dom'
+import { PAD_X, PAD_Y } from '../config'
+import { pointerToDocument } from '../layout/coords'
+import { pixelToCursor } from '../layout/caret-position'
+import { docToVisualY } from '../layout/pagination'
 import { trace } from './tracer'
 
 /** Deterministic PRNG, so two runs of the same size are comparable. */
@@ -107,6 +111,7 @@ export interface StressReport {
     sectionsNotOnPageBoundary: string[]
     linesSpillingAcrossSections: number
     overlappingParagraphs: number
+    hitTestMisses: number
   }
   memoryMB?: number
 }
@@ -312,6 +317,7 @@ export async function runStressBenchmark(): Promise<StressReport> {
       sectionsNotOnPageBoundary: notOnBoundary,
       linesSpillingAcrossSections: spill,
       overlappingParagraphs: overlappingParagraphs().length,
+      hitTestMisses: checkHitTesting().length,
     },
     memoryMB: (performance as any).memory
       ? Math.round((performance as any).memory.usedJSHeapSize / 1048576)
@@ -366,6 +372,43 @@ export function overlappingParagraphs(): Array<{ paraIndex: number; top: number;
     }
   }
   return out
+}
+
+
+/**
+ * Click where a line is painted and the caret must land in that line. Sampled
+ * down the whole document, and in the gaps between paragraphs as well as on the
+ * text, because document Y and visual Y agree at the top of the document and
+ * drift by PAGE_GAP per page below it: a unit mix-up is invisible on page one
+ * and teleports you pages away on page fifty. Goes through the same conversion
+ * the mouse does (layout/coords.ts), so it tests the real path.
+ */
+export function checkHitTesting(samples = 40): Array<{ paraIndex: number; got: number; y: number; where: string }> {
+  const rect = docWrap.getBoundingClientRect()
+  const misses: Array<{ paraIndex: number; got: number; y: number; where: string }> = []
+  const lines = view.lines
+  if (lines.length === 0) return misses
+  const step = Math.max(1, Math.floor(lines.length / samples))
+  for (let i = 0; i < lines.length; i += step) {
+    const line = lines[i]
+    const height = line.height || 27
+    const probes: Array<{ y: number; where: string }> = [
+      { y: line.yTop + height / 2, where: 'on the line' },
+      { y: line.yTop + height + 3, where: 'in the gap below' },
+    ]
+    for (const probe of probes) {
+      const clientY = rect.top + PAD_Y + docToVisualY(probe.y) - docWrap.scrollTop
+      const clientX = rect.left + PAD_X + Math.min(20, line.width)
+      const point = pointerToDocument(clientX, clientY)
+      const got = pixelToCursor(point.x, point.y)
+      // One paragraph either way is a legitimate answer in a gap; more than that
+      // means the coordinate itself was wrong.
+      if (Math.abs(got.para - line.paraIndex) > 1) {
+        misses.push({ paraIndex: line.paraIndex, got: got.para, y: Math.round(probe.y), where: probe.where })
+      }
+    }
+  }
+  return misses
 }
 
 const NEWLINE = String.fromCharCode(10)

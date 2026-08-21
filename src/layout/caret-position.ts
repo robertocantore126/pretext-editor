@@ -7,7 +7,6 @@ import { doc } from '../state/doc'
 import { view } from '../state/view'
 import type { Cursor, LineInfo } from '../types'
 import { runCache } from './cache'
-import { docToVisualY, visualToDocY } from './pagination'
 
 // Pure geometry: cursor <-> pixel. Kept free of render/ so that render/draw.ts can
 // import it without creating a cycle.
@@ -30,8 +29,16 @@ export function caretPixelPosition(): { x: number; y: number } | null {
   const x = line.x + measureTextWidthOnPara(line.paraIndex, line.text.slice(0, within), line.startOffset)
   return { x, y: line.yTop }
 }
-export function pixelToCursor(px: number, py: number): Cursor {
-  const docY = visualToDocY(py)
+/**
+ * The cursor nearest a point given in **document** coordinates (layout/coords.ts
+ * turns a pointer event into them). It used to take a visual Y and convert
+ * internally, which left the fallback below comparing a visual Y against the
+ * lines' document Y: a click that missed a line's band — the gap between
+ * paragraphs, blank space on a page, below the last line — then walked the
+ * document with a coordinate inflated by PAGE_GAP per page and landed further
+ * down. That is the "I clicked here and it jumped there" report.
+ */
+export function pixelToCursor(px: number, docY: number): Cursor {
   if (view.lines.length === 0) return { para: 0, offset: 0 }
     // B5: hit-test against each line's real height, not the constant LINE_HEIGHT.
     const candidates = view.lines.filter((l) => docY >= l.yTop && docY < l.yTop + (l.height || LINE_HEIGHT))
@@ -46,11 +53,11 @@ export function pixelToCursor(px: number, py: number): Cursor {
   } else {
     best = view.lines[0]
     for (const l of view.lines) {
-      if (py >= l.yTop && py < l.yTop + (l.height || LINE_HEIGHT)) {
+      if (docY >= l.yTop && docY < l.yTop + (l.height || LINE_HEIGHT)) {
         best = l
         break
       }
-      if (l.yTop <= py) best = l
+      if (l.yTop <= docY) best = l
     }
   }
   const localX = px - best.x
@@ -106,10 +113,8 @@ export function moveCursorVertical(dir: 1 | -1): void {
   if (stickyX === null) stickyX = pos.x
   const line = lineForCursor(doc.cursor)
   const step = line ? line.height || LINE_HEIGHT : LINE_HEIGHT
-  // pos.y is a document Y but pixelToCursor takes a visual Y (it calls
-  // visualToDocY itself); step through visual space so the page gaps are not
-  // subtracted twice, which drifts by PAGE_GAP for every page down the document.
-  const targetY = docToVisualY(pos.y) + dir * step
+  // Both are document Y now, so a step is just a step.
+  const targetY = pos.y + dir * step
   const c = pixelToCursor(stickyX, targetY)
   setCursor(c)
 }
