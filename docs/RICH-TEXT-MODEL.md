@@ -353,9 +353,12 @@ breaks and how wide the natural line is; the pass only chooses x-positions when 
 Constraint: pretext behaviour is frozen. Justification never feeds back into breaking — the
 fragment geometry stays exactly as pretext produced it.
 
-Open question: with both-sides wrap a line has two slots; decide whether each slot
-justifies independently. Slots beside a wrapped image are usually short, so justify is rare
-there, but the rule needs stating, not assuming.
+Decision (implemented): **each slot justifies independently**. `layout/paragraph.ts`
+computes `justifyGap = slack / gapCount` per visual line — its own slot width minus the
+natural width, spread over the line's inter-word gaps — plus a per-fragment
+`justifyOffset`; `render/draw.ts` paints the line word by word, widening each gap. The
+last line of a paragraph stays left-aligned. Slots beside a wrapped image are usually
+short, so justify is rare there.
 
 ### Footnotes compose without model changes
 
@@ -394,6 +397,11 @@ importing images as blobs rather than leaving remote URLs in the document. Blob 
 also matches the existing persistence path (`serializeImages`/`restoreImages`), so a
 pasted image survives a reload like any other.
 
+Decision (implemented): **remote images are fetched at paste time and imported as local
+blobs** (`images.ts::addImageFromSrc`). On CORS or network failure the URL is shown
+directly and persistence degrades. A size guard for pages full of images is still open
+(§12).
+
 ## 10. Dependencies and sequencing
 
 This feature cannot be built on the current model. Required first, in order:
@@ -409,7 +417,8 @@ should be decided separately.
 
 ## 11. Verification
 
-Add to [VERIFY.md](./VERIFY.md) once the importer exists:
+Done — the checks below were added to [VERIFY.md](./VERIFY.md) §8 once the importer
+existed, and have been passing on the branch.
 
 - Round-trip a known HTML fixture through the walker and assert the resulting `Block[]`
   against a snapshot — families, sizes, colours, alignment, indent, list levels.
@@ -422,19 +431,17 @@ Add to [VERIFY.md](./VERIFY.md) once the importer exists:
 
 ## 12. Open decisions
 
-Recorded so this document is not mistaken for a settled spec.
+Recorded so this document is not mistaken for a settled spec. Resolved items are struck
+through with the decision taken.
 
-- **Justification per slot** (§7): under both-sides wrap, do the two slots of a line
-  justify independently? Default assumption: yes — each slot treats its own fragment as
-  the line to justify.
-- **Remote images at paste time** (§9): fetch-and-import (preferred; blob import matches
-  `serializeImages`/`restoreImages`), import only on explicit user action, or leave the URL
-  live? Needs a product decision and a size guard — a page full of images is a memory and
-  network event.
-- **Implementation order** (§10): model-first (interned styles + BlockAttrs) or a
-  provisional walker on a throwaway model to validate the pipeline against real pastes
-  first. This doc assumes model-first; the walker-first path proves the walker, not the
-  model.
+- ~~**Justification per slot** (§7)~~ — **decided**: each slot justifies independently;
+  implemented in `layout/paragraph.ts` + `render/draw.ts`.
+- ~~**Remote images at paste time** (§9)~~ — **decided**: fetch-and-import as local blobs
+  at paste time, falling back to the live URL on CORS/network failure. Still open: a size
+  guard — a page full of images is a memory and network event.
+- ~~**Implementation order** (§10)~~ — **decided by construction**: model-first (interned
+  styles + BlockAttrs, then the walker).
+- **Tables**: remain out of scope; they need the flat-array-to-tree change (§8).
 - **Tables**: deferred to the block-tree change and decided separately (§8, §10).
 - **Ownership**: the feature spans both tracks. Model, importer, clipboard and persistence
   are A-owned (`model/`, `input/clipboard.ts`, `io/`). New painting (colour, background,

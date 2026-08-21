@@ -69,7 +69,7 @@ function styleFromComputed(el: HTMLElement, ctx: WalkContext): InlineStyle {
     underline: ctx.underline,
     strike: ctx.strike,
     color: cs.color,
-    background: ctx.background,
+    background: ownBackground(cs) ?? ctx.background,
     letterSpacing: Number.isFinite(ls) ? ls : 0,
     baseline: va === 'super' ? 'super' : va === 'sub' ? 'sub' : 'normal',
     linkHref: ctx.linkHref,
@@ -228,6 +228,10 @@ function walk(nodes: Node[]): PendingBlock[] {
       if (top.type === 'number') top.counter++
     }
 
+    // curStyle is what appendText interns, so an inline element's style must
+    // not leak into the siblings that follow it: save and restore around the
+    // children. (A block element's style is scoped by its own open/close.)
+    const savedStyle = curStyle
     curStyle = styleFromComputed(el, childCtx)
 
     let opened = false
@@ -237,6 +241,7 @@ function walk(nodes: Node[]): PendingBlock[] {
     }
     for (const child of Array.from(el.childNodes)) visit(child, childCtx)
     if (opened) closeBlock()
+    curStyle = savedStyle
   }
 
   const rootCtx: WalkContext = {

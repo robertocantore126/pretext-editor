@@ -131,8 +131,28 @@ export function addImageFromBlob(blob: Blob, x: number, y: number, w: number, h:
   createFloatImage(URL.createObjectURL(blob), { kind: 'fixed', x, y, w, h })
 }
 
-/** Adds an image from a URL string (remote or data:), auto-sized at the caret. Used by the HTML importer. */
+/**
+ * Adds an image from a URL string (remote or data:), auto-sized at the caret.
+ * Used by the HTML importer (RICH-TEXT-MODEL.md §9). Remote URLs are fetched
+ * into a local blob first, so the image survives a reload through
+ * serializeImages/restoreImages without a CORS taint on save; data:/blob: URLs
+ * pass through untouched.
+ */
 export function addImageFromSrc(src: string) {
+  if (/^https?:/i.test(src)) {
+    fetch(src, { mode: 'cors' })
+      .then((res) => {
+        if (!res.ok) throw new Error('fetch failed')
+        return res.blob()
+      })
+      .then((blob) => createFloatImage(URL.createObjectURL(blob), { kind: 'auto' }))
+      .catch(() => {
+        // CORS or network failure: fall back to showing the remote URL directly.
+        // Display works; persisting it may fail, but the paste still succeeds.
+        createFloatImage(src, { kind: 'auto' })
+      })
+    return
+  }
   createFloatImage(src, { kind: 'auto' })
 }
 

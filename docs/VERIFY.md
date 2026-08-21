@@ -213,3 +213,133 @@ Unused imports left behind by a refactor:
 ```bash
 npx tsc --noEmit --noUnusedLocals
 ```
+
+---
+
+## 8. Rich-text import (RICH-TEXT-MODEL.md §11)
+
+Added when the HTML importer landed. Sections §0–§7 above are untouched; this section
+extends the harness for the rich-text model. The importer is the live module, so the
+console can call it directly:
+
+```js
+const { importHTML } = await import('/src/input/html-import.ts')
+```
+
+The snippets are additive (each import appends at the caret), so re-running one finds the
+first occurrence and still passes.
+
+**8.1 — Fixture round trip.** Families, sizes, colours, alignment, indent and list levels
+survive the walk, asserted against the model (`Block[]` is internal; `doc` is the
+contract).
+
+```js
+(async () => {
+  const { importHTML } = await import('/src/input/html-import.ts')
+  const { doc } = await import('/src/state/doc.ts')
+  importHTML('<h1 style="text-align:center">Titolo</h1>' +
+    '<p style="text-indent:30px">Un <b>paragrafo</b> con <i>stile</i>.</p>' +
+    '<ul><li>primo</li><li>secondo</li></ul>')
+  const a = (i) => (i >= 0 ? doc.blockAttrs[i] : null)
+  // The first imported block is glued to the paragraph where the caret sits
+  // (paste semantics), so match 'Titolo' by suffix, not equality.
+  const h1 = doc.paragraphs.findIndex((p) => p.endsWith('Titolo'))
+  const p1 = doc.paragraphs.findIndex((p) => p === 'Un paragrafo con stile.')
+  const l1 = doc.paragraphs.findIndex((p) => p === 'primo')
+  const boldId = p1 >= 0 ? doc.styleIds[p1][3] : 0
+  return {
+    heading: a(h1)?.kind === 'heading' && a(h1)?.headingLevel === 1 && a(h1)?.align === 'center',
+    indent: a(p1)?.indentFirstLine === 30,
+    listItem: a(l1)?.kind === 'listItem' && a(l1)?.list?.level === 1,
+    bold: doc.styleTable[boldId].fontWeight > 400,
+  }
+})()
+```
+
+**Pass:** all four booleans `true`.
+
+**8.2 — The §3 gotcha.** `<u><em>x</em></u>` must keep the underline on `x` even though
+`text-decoration` is not inherited (this regresses silently).
+
+```js
+(async () => {
+  const { importHTML } = await import('/src/input/html-import.ts')
+  const { doc } = await import('/src/state/doc.ts')
+  importHTML('<u>a<em>x</em></u>')
+  const pi = doc.paragraphs.findIndex((p) => p.includes('ax'))
+  const x = doc.paragraphs[pi].indexOf('x')
+  return { underline: !!doc.styleTable[doc.styleIds[pi][x]].underline }
+})()
+```
+
+**Pass:** `underline: true`.
+
+**8.3 — Nested highlight keeps its background.** `background-color` is not inherited; the
+inner span must carry its own colour, the outer one must keep its own too.
+
+```js
+(async () => {
+  const { importHTML } = await import('/src/input/html-import.ts')
+  const { doc } = await import('/src/state/doc.ts')
+  importHTML('<span style="background:#ffff00">a<span style="background:#ff0000">b</span>c</span>')
+  const pi = doc.paragraphs.findIndex((p) => p.includes('abc'))
+  const t = doc.styleTable
+  const id = (off) => doc.styleIds[pi][doc.paragraphs[pi].indexOf('abc') + off]
+  return { inner: t[id(1)].background, outer: t[id(2)].background }
+})()
+```
+
+**Pass:** `inner: "rgb(255, 0, 0)"`, `outer: "rgb(255, 255, 0)"`.
+
+**8.4 — Pasted `<style>` never touches the host page.** The shadow root scopes it; after
+the import the host DOM must contain no trace of the pasted classes and its computed
+styles must be unchanged.
+
+```js
+(async () => {
+  const { importHTML } = await import('/src/input/html-import.ts')
+  const before = getComputedStyle(document.body).color
+  importHTML('<style>.hostleak{color:rgb(255,0,0)}</style><div class="hostleak">x</div>')
+  return {
+    hostElements: document.querySelectorAll('.hostleak').length,
+    hostColorUnchanged: getComputedStyle(document.body).color === before,
+  }
+})()
+```
+
+**Pass:** `hostElements: 0`, `hostColorUnchanged: true`.
+
+**8.5 — Unknown block-level element opens a block.** Structure comes from `display`, not
+from a tag whitelist.
+
+```js
+(async () => {
+  const { importHTML } = await import('/src/input/html-import.ts')
+  const { doc } = await import('/src/state/doc.ts')
+  importHTML('<custom-tag style="display:block;text-indent:30px">segue</custom-tag>')
+  const pi = doc.paragraphs.findIndex((p) => p.includes('segue'))
+  return { block: pi >= 0 && doc.blockAttrs[pi].indentFirstLine === 30 }
+})()
+```
+
+**Pass:** `block: true`.
+
+**8.6 — Large real-world paste does not regress the keystroke benchmark.** Import a long
+styled document, then type; the per-keystroke cost must stay in the incremental-layout
+shape (flat, not linear).
+
+```js
+(async () => {
+  const { importHTML } = await import('/src/input/html-import.ts')
+  const { doc } = await import('/src/state/doc.ts')
+  const ta = document.querySelector('textarea.caret-input'); ta.focus()
+  const para = '<p>Nel mezzo del cammin di nostra vita mi ritrovai per una selva oscura che la diritta via era smarrita. <b>Forte</b> e <i>aspra</i> cosa.</p>'
+  importHTML(Array(30).fill(para).join(''))
+  const type1 = () => { ta.value = 'x'; ta.dispatchEvent(new Event('input', { bubbles: true })) }
+  const t0 = performance.now(); for (let i = 0; i < 5; i++) type1(); const t1 = performance.now()
+  return { paras: doc.paragraphs.length, perKeystrokeMs: +((t1 - t0) / 5).toFixed(1) }
+})()
+```
+
+**Pass:** `perKeystrokeMs` well under 10 ms after the import (the flat incremental-layout
+shape from §2; a linear regression puts it in the tens of ms).

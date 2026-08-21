@@ -125,7 +125,11 @@ export function draw() {
       ctx.fillStyle = INK
       ctx.fillText(bAttrs.list.marker, PAD_X + line.x - markerW - 10, markerY)
     }
-    let xPos = PAD_X + line.x
+    // Justified lines (RICH-TEXT-MODEL.md §7): pretext broke the line and
+    // layoutParagraph distributed the slack as justifyGap/justifyOffset; here
+    // the words are painted one segment at a time, widening each inter-word
+    // gap. The underline/strike then span the painted width, not the natural one.
+    let xPos = PAD_X + line.x + (line.justifyOffset || 0)
     const globalStart = line.startOffset
     const lineTopY = PAD_Y + docToVisualY(line.yTop)
     for (const style of getStyleRunsInRange(line.paraIndex, globalStart, line.endOffset)) {
@@ -133,33 +137,53 @@ export function draw() {
       const fontSize = styleFontSize(style)
       ctx.font = fontForStyle(style)
       measureCtx.font = ctx.font
-      const w = measureCtx.measureText(segText).width
-      if (style.background) {
-        ctx.fillStyle = style.background
-        ctx.fillRect(xPos, lineTopY + 2, w, (line.height || LINE_HEIGHT) - 5)
-      }
-      ctx.fillStyle = style.color
+      const runStart = xPos
       const baselineShift = style.baseline === 'super' ? -fontSize * 0.28 : style.baseline === 'sub' ? fontSize * 0.18 : 0
       const baselineY = lineTopY + fontSize * 0.92 + baselineShift
-      ctx.fillText(segText, xPos, baselineY)
+      if (line.justifyGap && line.justifyGap > 0) {
+        const parts = segText.split(/([ \t\n\f\r]+)/).filter((p) => p !== '')
+        for (let k = 0; k < parts.length; k++) {
+          const part = parts[k]
+          const pw = measureCtx.measureText(part).width
+          if (style.background) {
+            ctx.fillStyle = style.background
+            ctx.fillRect(xPos, lineTopY + 2, pw, (line.height || LINE_HEIGHT) - 5)
+          }
+          ctx.fillStyle = style.color
+          ctx.fillText(part, xPos, baselineY)
+          xPos += pw
+          // Widen the inter-word gap: after a whitespace run that is followed
+          // by more text, add the distributed slack.
+          if (k + 1 < parts.length && /^[ \t\n\f\r]+$/.test(part)) xPos += line.justifyGap
+        }
+      } else {
+        const w = measureCtx.measureText(segText).width
+        if (style.background) {
+          ctx.fillStyle = style.background
+          ctx.fillRect(xPos, lineTopY + 2, w, (line.height || LINE_HEIGHT) - 5)
+        }
+        ctx.fillStyle = style.color
+        ctx.fillText(segText, xPos, baselineY)
+        xPos += w
+      }
+      const runEnd = xPos
       if (style.underline) {
         const uy = baselineY + 2
         ctx.strokeStyle = style.color
         ctx.lineWidth = 1
         ctx.beginPath()
-        ctx.moveTo(xPos, uy)
-        ctx.lineTo(xPos + w, uy)
+        ctx.moveTo(runStart, uy)
+        ctx.lineTo(runEnd, uy)
         ctx.stroke()
       }
       if (style.strike) {
         ctx.strokeStyle = style.color
         ctx.lineWidth = 1
         ctx.beginPath()
-        ctx.moveTo(xPos, baselineY - fontSize * 0.42)
-        ctx.lineTo(xPos + w, baselineY - fontSize * 0.42)
+        ctx.moveTo(runStart, baselineY - fontSize * 0.42)
+        ctx.lineTo(runEnd, baselineY - fontSize * 0.42)
         ctx.stroke()
       }
-      xPos += w
       ctx.font = FONT
     }
   }

@@ -31,6 +31,14 @@ export interface LineInfo {
   endOffset: number
   /** The real height of this visual line (headline lines are taller). */
   height: number
+  /**
+   * Justified lines only (RICH-TEXT-MODEL.md §7): extra pixels to add after
+   * each inter-word gap when painting, so the line fills its slot. pretext
+   * still decides the breaks; this is a paint-time pass on its output.
+   */
+  justifyGap?: number
+  /** Extra pixels this fragment starts at: its share of the gaps before it. */
+  justifyOffset?: number
 }
 
 /** One contiguous styled run of a paragraph, with per-char widths and their prefix sums. */
