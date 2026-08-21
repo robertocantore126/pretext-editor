@@ -79,13 +79,47 @@ html, body {
   border-radius: 4px;
   box-shadow: 0 12px 30px rgba(60, 30, 90, 0.18);
   position: relative;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   cursor: text;
+  height: calc(100vh - 180px);
+  min-height: 300px;
+  overscroll-behavior: contain;
+}
+
+.doc-viewport {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 0;
+  pointer-events: none;
 }
 
 .doc-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: block;
   width: 100%;
+}
+
+.doc-spacer {
+  position: relative;
+  z-index: 0;
+}
+
+.caret-dom {
+  position: absolute;
+  width: 2px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 3;
+  animation: caret-blink 1.06s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
 }
 
 .img-handle {

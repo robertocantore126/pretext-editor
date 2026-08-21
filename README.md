@@ -48,8 +48,22 @@ delle interruzioni di riga, non dell'editing in sé.
 - [Vite](https://vitejs.dev) + TypeScript, nessun framework
 - [`@chenglou/pretext`](https://www.npmjs.com/package/@chenglou/pretext) per il layout del testo
 
+## Struttura del progetto
+
+Il codice e diviso in moduli sotto `src/` (layout, render, edit, images, io, input).
+Vedi **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** per come funziona il motore di
+impaginazione e quali sono i problemi noti misurati, e
+**[docs/ROADMAP.md](docs/ROADMAP.md)** per il piano di lavoro, oppure
+**[docs/PARALLEL-PLAN.md](docs/PARALLEL-PLAN.md)** per la suddivisione in due tracce
+di lavoro parallele senza file condivisi.
+
 ## Limiti noti
 
 - Il trascinamento delle immagini con il dito su mobile/touch non è ancora implementato
   (funziona con il mouse).
-- Non c'è ancora salvataggio/esportazione del documento: è pensato come base da estendere.
+- Esportazione in HTML / JSON / PDF disponibile dalla toolbar; non c'è ancora un salvataggio
+  automatico, quindi un refresh perde il documento.
+- Nessun annulla/ripristina, e la formattazione si disallinea se si modifica il testo
+  attorno ad essa. Vedi [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §3.5.
+- Documenti grandi rallentano molto: ~82 ms per battuta a 67k caratteri.
+  Vedi [docs/ROADMAP.md](docs/ROADMAP.md) passi 4-5.
