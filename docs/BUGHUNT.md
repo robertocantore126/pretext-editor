@@ -40,9 +40,8 @@ Fixed in the current `dev` tree (uncommitted at the time of writing):
 
 Still open: image undo/redo (images are not in history), RTL (`direction` stored but
 not rendered), IME Enter-to-confirm newline leak (browser-dependent, unverified),
-IndexedDB quota handling for very large images, multi-run justified lines in the PDF
-export, empty-block preservation in the HTML import, and the blockquote indent
-accumulation.
+IndexedDB quota handling for very large images, empty-block preservation in the HTML
+import, and the blockquote indent accumulation.
 
 ---
 
@@ -372,3 +371,102 @@ le `paraIndex` dentro le righe in cache, che è il punto in cui un fuzz di 400 p
 subito l'errore. Stessa garanzia di H1, senza rifare l'impaginazione dei paragrafi intatti:
 **4,5 ms** invece di 500. Il caso net-zero split/merge di H1 resta verificato: è una rimozione
 seguita da un inserimento, quindi il paragrafo che finisce a p+1 è visto come nuovo.
+
+---
+
+## Aggiornamento PDF diacritici (2026-08-22)
+
+jsPDF's standard-14 font (Helvetica, WinAnsi ≈ Latin-1) could not encode the transliteration
+diacritics of Romanized Sanskrit/Buddhist text (ā ī ū ṇ ṃ ṣ ś …), so a pasted Wikipedia
+article (śramaṇa / pāramitā / saṃsāra / nirvāṇa) came out glyph-corrupted in the PDF export.
+
+The exporter (`io/pdf.ts`) now bundles **Liberation Serif** (SIL OFL 1.1 — Georgia is
+proprietary so it cannot be redistributed) — regular/bold/italic/bolditalic TTF in
+`src/io/fonts/`, imported as Vite assets, `fetch`ed to base64, registered via
+`addFileToVFS` + `addFont(…, 'Identity-H')`, and `setFont('Serif', …)` used for titles and
+body. Every latin-extended block those diacritics need is covered (verified against the
+fonts' cmap), and the body is now a book serif instead of Helvetica — closer to the
+on-screen Georgia. Verified live: regenerated the PDF and rendered it; ś ṇ ā ṃ all render
+(intact ToUnicode CMap: `<011d>→U+015B`, `<00c3>→U+0101`, `<0634>→U+1E47`, `<0630>→U+1E43`).
+Note: `pdftotext` may still drop these chars (its CID handling of per-char `bfchar`
+entries), but that is an extraction artifact — the glyphs render correctly.
+
+---
+
+## Il PDF non stampava quello che si vede (2026-08-22)
+
+Sintomo riportato: nell'export ogni parola aveva uno spazio vuoto dopo di sé, i link erano
+neri invece che blu, e il foglio non era stampabile. Tre difetti indipendenti, che si
+sommavano.
+
+**1. La dimensione del font non era convertita nell'unità della pagina.** Con
+`unit: 'px'` jsPDF moltiplica le *coordinate* per 96/72 ma emette `setFontSize` così
+com'è: un run da 17 px veniva disegnato a 17 **pt** dentro uno spazio in cui 1 px valeva
+1,333 pt, cioè con un occhio di 12,75 px — il 25 % più piccolo dello slot che il layout gli
+aveva assegnato. Lo stesso fattore rendeva il foglio 12,9 × 19,6 pollici (nel PDF allegato
+dall'utente: 15,65 × 19,63), che nessuna stampante stampa a 1:1. Il documento ora si
+costruisce in **punti**, con `PT = 72/96` applicato a ogni lunghezza in uscita.
+
+**2. Il carattere del PDF non era quello con cui il layout aveva misurato.** `view.lines`
+non è una lista di righe ma di *frammenti* (uno per parola), ciascuno con la x assoluta che
+`layout/paragraph.ts` ha calcolato misurando **Georgia** sul canvas. Disegnando quei
+frammenti in Liberation Serif (~11 % più stretto a parità di corpo) ogni parola restava
+corta nel proprio slot. Sommato al punto 1: 77,6 px di slot contro 52,4 px di inchiostro,
+1,48× — il buco visibile dopo ogni parola. Ora `src/io/fonts/` contiene anche Georgia
+(fsType 8, *editable embedding*, quindi incorporabile in un documento); Liberation Serif
+resta sotto come **fallback per codepoint**, perché Georgia si ferma al Latin Extended-A e
+non ha ṇ ṃ ṣ ṛ — gli stessi caratteri per cui il browser già ripiega su un'altra faccia a
+schermo. La copertura si legge dalla `cmap` del file, intersecata sui quattro pesi: un
+codepoint mancante in jsPDF diventa `.notdef`, cioè un buco silenzioso.
+
+**3. L'exporter rifaceva il lavoro del painter invece di trascriverlo.** Colore del testo,
+sfondo, barrato, apice/pedice, letter-spacing e i marker delle liste non arrivavano affatto
+nel PDF, e le larghezze venivano ricalcolate (prima con le metriche Georgia, poi con
+`pdf.getTextWidth`) invece di essere prese dal layout. Ora il ciclo è un mirror di
+`render/draw.ts`: stessi frammenti, stesso `measureCtx`, stesse regole di giustificazione,
+e l'unica differenza è dove finisce l'inchiostro.
+
+Verificato sovrapponendo le due immagini: `scripts/verify-pdf-fidelity.mjs` carica un
+documento di prova (colori, apici, evidenziato, barrato, link, immagine con testo attorno,
+paragrafo giustificato, diacritici sanscriti), fotografa il canvas dell'editor, esporta il
+PDF, lo rasterizza a 96 dpi — un pixel raster per pixel CSS — e confronta. Nel diff restano
+solo i **contorni** dei glifi (Chrome fa hinting su Georgia, il rasterizzatore PDF no):
+5,0 % di pixel di bordo, 0,2 % di blocchi 3×3 pieni. Un blocco pieno significa spostamento;
+prima della correzione erano oltre il 10 %.
+
+Resta aperto: `fontFamily` per singolo run (tutto il PDF usa l'unica famiglia incorporata),
+e il fatto che la larghezza del foglio dipende dalla larghezza della finestra, perché è
+`view.docWidth` — l'export è fedele a quello che si vede, ma due finestre diverse danno due
+formati diversi.
+
+### Seguito: un solo carattere per tutto il PDF (2026-08-22)
+
+Corretta la geometria, restava un difetto opposto al primo: nell'export le parole si
+mangiavano lo spazio (e la virgola) prima del run successivo — `Buddhadharmaand`,
+`attributed tothe Buddha`, `Buddhism[a]` senza virgola.
+
+Causa: `InlineStyle.fontFamily` è **per run**. L'importer HTML salva lo stack calcolato
+della pagina di origine (`getComputedStyle(el).fontFamily`), quindi un articolo incollato
+da Wikipedia porta con sé un sans, che è ciò che il layout misura e che l'editor disegna;
+l'exporter invece disegnava tutto in Georgia. Georgia è più larga del sans: ogni run
+sbordava dal proprio slot e copriva l'inizio del successivo. Lo stesso difetto della prima
+correzione — disegnare con metriche diverse da quelle con cui il layout ha misurato — solo
+con il segno invertito.
+
+Ora ogni run risolve il proprio stack CSS a una famiglia incorporata, prendendo il primo
+nome riconosciuto come fa il browser con il primo nome installato: Georgia (serif),
+Arial (`sans-serif` generico, che è ciò a cui Chrome risolve su Windows), Segoe UI
+(`system-ui`, `"Segoe UI"`, Calibri) e Courier New (`monospace`). Tutte con fsType 8.
+Si caricano solo le famiglie che il documento usa davvero — `familiesUsed()` legge
+`doc.styleTable` — perché altrimenti ogni export sposterebbe una dozzina di MB di TTF.
+
+In più una rete di sicurezza generale: ogni span viene **adattato allo slot** che il layout
+ha misurato, distribuendo la differenza come `charSpace`. Quando la faccia è quella giusta
+la correzione è ~0 e non muove nulla; quando non può esserlo (un documento che nomina un
+font non incorporato qui) il testo comincia e finisce comunque dove lo mette l'editor,
+invece di sovrapporsi o lasciare un buco. `letterSpacing` non ha più un ramo suo: il layout
+lo ha già contato dentro lo slot.
+
+La fixture di `verify-pdf-fidelity.mjs` ora contiene i due stack insieme — un paragrafo
+sans incollato e uno serif scritto nell'editor, più uno span monospace — perché è la
+combinazione che rompeva. Diff: solo contorni, 0,17 % di blocchi pieni.

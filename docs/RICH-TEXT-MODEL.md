@@ -454,11 +454,31 @@ through with the decision taken.
 - ~~**Implementation order** (§10)~~ — **decided by construction**: model-first (interned
   styles + BlockAttrs, then the walker).
 - **Tables**: remain out of scope; they need the flat-array-to-tree change (§8).
-- **Export fidelity**: `io/html.ts` and `io/pdf.ts` now respect alignment and
-  justification (HTML via `text-align:justify` on the painted width; PDF via jsPDF's
-  built-in justify for single-run lines). Left as-is: list markers and indentation in
-  the exports, and multi-run justified lines in the PDF (they stay left-aligned to
-  avoid per-run collisions).
+- **Export fidelity**: `io/html.ts` respects alignment and justification via
+  `text-align:justify` on the painted width. `io/pdf.ts` is a *transcription of the
+  paint*, not a second layout pass: it walks the same `view.lines` fragments as
+  `render/draw.ts`, in the same order, measuring with the same `measureCtx`, and only
+  changes where the ink goes — colour, background, strike, super/subscript,
+  letter-spacing, list markers and justification all mirror the painter line for line.
+  jsPDF's built-in `align:'justify'` is deliberately not used: its metrics are not the
+  layout's, so `maxWidth = paintedWidth` spilled the leftover into giant gaps that even
+  split words. The PDF page is exactly one program page — height `PAGE_HEIGHT`, width
+  `docWidth + 2*PAD_X`, content 0-based vertically and `PAD_X`-inset horizontally — so
+  pagination and an image's on-page position coincide with the editor (previously the
+  PDF sheet was `PAGE_HEIGHT + 2*PAD_Y` tall, so its pages did not match the program's
+  and images near a boundary lined up on the wrong page). Two invariants hold the
+  fidelity up and are easy to break: the sheet is built in **points** (`PT = 72/96`,
+  every length multiplied on the way out) because jsPDF's `unit:'px'` scales
+  coordinates but not font sizes; and every run is drawn in **the face that run was
+  measured with** — `InlineStyle.fontFamily` resolves to an embedded family per run
+  (Georgia / Arial / Segoe UI / Courier New, with Liberation Serif under Georgia for
+  the codepoints it has no glyph for), because a pasted article carries the source
+  page's stack and one face for the whole document makes those runs miss their slot.
+  As a backstop each span is fitted to the width the layout measured for it, spreading
+  the difference as `charSpace`: zero when the faces agree, and never an overrun or a
+  hole when a document names a font that is not embedded here.
+  `scripts/verify-pdf-fidelity.mjs` diffs an exported page against the editor's own
+  canvas and is the check for all of it. Left as-is: indentation in the exports.
 - **Tables**: deferred to the block-tree change and decided separately (§8, §10).
 - **Ownership**: the feature spans both tracks. Model, importer, clipboard and persistence
   are A-owned (`model/`, `input/clipboard.ts`, `io/`). New painting (colour, background,
