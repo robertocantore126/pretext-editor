@@ -4,6 +4,7 @@ import { decoration, decorationPolyline } from '../model/decorations'
 import { getStyleRunsInRange, styleFontSize } from '../model/runs'
 import { measureTextWidthOnPara } from '../measure'
 import { titleFont, TITLE_SPACE_ABOVE } from '../render/title'
+import { materializeAll } from '../layout/engine'
 import { view } from '../state/view'
 
 export function escapeHtml(s: string) {
@@ -28,6 +29,10 @@ function countInteriorGaps(text: string): number {
 }
 
 export async function exportHTML() {
+  // An export is the whole document by definition: materialize every paragraph
+  // first — view.lines normally holds only the viewport band (docs/LAZY-LAYOUT.md
+  // §4), and exporting the window would silently truncate the file.
+  materializeAll()
   // BUGHUNT C1: unserializable images are skipped, not fatal.
   const imgs = (await Promise.all(
     view.images.map(async (im) => {

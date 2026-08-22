@@ -7,11 +7,20 @@ import { doc } from '../state/doc'
 import { view } from '../state/view'
 import type { Cursor, LineInfo } from '../types'
 import { runCache } from './cache'
+import { paragraphAtY } from './heights'
+import { materializeParagraph } from './engine'
 
 // Pure geometry: cursor <-> pixel. Kept free of render/ so that render/draw.ts can
 // import it without creating a cycle.
 
 export function lineForCursor(c: Cursor): LineInfo | null {
+  // view.lines holds only the materialized band (docs/LAZY-LAYOUT.md §4); a
+  // cursor that moved there by keyboard navigation or a tab jump has no line
+  // in it yet. Materialize its paragraph before answering — lineForCursor must
+  // never return "not found" just because the paragraph is far away.
+  if (!view.lines.some((l) => l.paraIndex === c.para)) {
+    materializeParagraph(c.para)
+  }
   const candidates = view.lines.filter((l) => l.paraIndex === c.para)
   if (candidates.length === 0) return null
   for (const l of candidates) {
@@ -40,6 +49,14 @@ export function caretPixelPosition(): { x: number; y: number } | null {
  */
 export function pixelToCursor(px: number, docY: number): Cursor {
   if (view.lines.length === 0) return { para: 0, offset: 0 }
+  // The clicked paragraph may not be materialized (a click just outside the
+  // window, a synthetic probe deep in the document). Materialize it first — and
+  // its neighbour below, because a click in the gap between paragraphs must
+  // still land — then answer against the fresh lines.
+  const target = paragraphAtY(docY)
+  if (!view.lines.some((l) => l.paraIndex >= target - 1 && l.paraIndex <= target + 1)) {
+    materializeParagraph(target)
+  }
     // B5: hit-test against each line's real height, not the constant LINE_HEIGHT.
     const candidates = view.lines.filter((l) => docY >= l.yTop && docY < l.yTop + (l.height || LINE_HEIGHT))
   let best: LineInfo

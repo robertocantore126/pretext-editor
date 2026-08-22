@@ -11,6 +11,7 @@ import { fontForStyle, getStyleRuns, styleFontSize } from '../model/runs'
 import { defaultBlockAttrs, doc } from '../state/doc'
 import { view } from '../state/view'
 import type { LineInfo } from '../types'
+import type { BlockAttrs } from '../types/doc'
 import type { CharRun } from '../types/layout'
 import { runCache } from './cache'
 import { computeLineSlots } from './slots'
@@ -53,9 +54,11 @@ function computeRuns(text: string, paraIndex: number): CharRun[] {
 
 /**
  * B5: push a line that would straddle a page boundary onto the next page, so
- * lines never bleed into the page gap (ROADMAP step 7).
+ * lines never bleed into the page gap (ROADMAP step 7). Exported for the
+ * re-place path (docs/LAZY-LAYOUT.md §2) which shares this rule with
+ * layoutParagraph.
  */
-function pushPastPageBoundary(y: number, lineH: number): number {
+export function pushPastPageBoundary(y: number, lineH: number): number {
   const page = Math.floor(y / PAGE_HEIGHT)
   const boundary = (page + 1) * PAGE_HEIGHT
   if (y < boundary && y + lineH > boundary) return boundary
@@ -169,6 +172,34 @@ interface LineMetric {
   /** justifyOffset for each pushed fragment (LineInfo index) of this line. */
   offsets: number[]
   indices: number[]
+}
+
+/**
+ * Re-place a paragraph's cached lines at a new y without breaking it again.
+ * Only valid when nothing that decides the breaks has changed — see the caller's
+ * guard. Returns the new height, and mutates the lines' yTop in place.
+ *
+ * The cached lines are *fragments* (one per piece of text on a visual line),
+ * not bands. Multiple fragments that share the same yTop sit on the same
+ * band; the push rule applies per band, advancing y by lineH after each band.
+ * Walking fragment-by-fragment and pushing each one would spread a single-line
+ * paragraph across three bands, which is what the differential gate in
+ * docs/LAZY-LAYOUT.md caught.
+ */
+export function replaceParagraphLines(lines: LineInfo[], startY: number, attrs: BlockAttrs): number {
+  const y0 = startY + attrs.spaceBefore
+  let y = y0
+  let i = 0
+  while (i < lines.length) {
+    // All fragments whose yTop matches lines[i] are one band.
+    const bandStart = i
+    const lineH = lines[i].height
+    while (i < lines.length && lines[i].yTop === lines[bandStart].yTop) i++
+    const newYTop = pushPastPageBoundary(y, lineH)
+    for (let j = bandStart; j < i; j++) lines[j].yTop = newYTop
+    y = newYTop + lineH
+  }
+  return y - y0 + attrs.spaceAfter
 }
 
 export function layoutParagraph(text: string, docWidth: number, startY: number, paraIndex: number): { lines: LineInfo[]; height: number } {

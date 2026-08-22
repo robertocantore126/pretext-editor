@@ -6,6 +6,7 @@ import { decoration, decorationPolyline } from '../model/decorations'
 import { fontForStyle, getStyleRunsInRange, styleFontSize } from '../model/runs'
 import { doc } from '../state/doc'
 import { titleFont, titleFontSize, TITLE_SPACE_ABOVE } from '../render/title'
+import { materializeAll } from '../layout/engine'
 import { view } from '../state/view'
 
 // The PDF is a *transcription of the paint*, not a second layout pass.
@@ -293,6 +294,11 @@ function pageOf(docY: number): number {
 }
 
 export async function exportPDF() {
+  // The PDF is a transcription of the paint; the paint holds only the
+  // materialized band (docs/LAZY-LAYOUT.md §4), so materialize the whole
+  // document first or the export silently misses every paragraph outside the
+  // window.
+  materializeAll()
   // BUGHUNT C1: unserializable images are skipped, not fatal.
   const imgs = (await Promise.all(
     view.images.map(async (im) => {

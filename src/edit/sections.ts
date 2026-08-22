@@ -6,7 +6,7 @@
 // change goes through applyEdit, so undo covers it like any other edit.
 
 import { docWrap } from '../dom'
-import { relayout } from '../layout/engine'
+import { materializeParagraph, relayout } from '../layout/engine'
 import { applyEdit, notifyChanged } from '../model/document'
 import { docToVisualY } from '../layout/pagination'
 import {
@@ -108,8 +108,15 @@ function totalLength(): number {
 export function goToSection(id: string): void {
   const entry = view.sections.find((s) => s.id === id)
   if (!entry) return
-  docWrap.scrollTop = Math.max(0, PAD_Y + docToVisualY(entry.y) - 24)
-  trace('section', 'goto', { id, y: entry.y, scrollTop: Math.round(docWrap.scrollTop) })
+  // With lazy layout the section's y is approximate while the paragraphs above
+  // it are estimates (docs/LAZY-LAYOUT.md §4). Materialize the section's own
+  // paragraph first — the pass updates view.sections with the y it actually
+  // lands at — then scroll to *that*, or clicking a far tab drops you near the
+  // section instead of at it.
+  materializeParagraph(entry.paraIndex)
+  const fresh = view.sections.find((s) => s.id === id) ?? entry
+  docWrap.scrollTop = Math.max(0, PAD_Y + docToVisualY(fresh.y) - 24)
+  trace('section', 'goto', { id, y: fresh.y, scrollTop: Math.round(docWrap.scrollTop) })
   const found = findSection(id)
   if (found) setCursor({ para: found.paraIndex, offset: 0 })
   repositionGhostInput()

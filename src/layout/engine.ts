@@ -13,8 +13,10 @@ import type { FloatImage, LineInfo } from '../types'
 import { takeDirty, takeShifts } from '../model/dirty'
 import { styleVersion } from '../model/runs'
 import { paraCache, shiftCaches } from './cache'
-import { docToVisualY } from './pagination'
-import { layoutParagraph } from './paragraph'
+import { docToVisualY, visualToDocY } from './pagination'
+import { layoutParagraph, replaceParagraphLines } from './paragraph'
+import { paragraphAtY, prepareHeights, resetHeights, setHeight, spliceHeights, yOf } from './heights'
+import { defaultBlockAttrs } from '../state/doc'
 
 /**
  * The tab that opens at this paragraph, if any. Paragraph 0 always opens one
@@ -142,6 +144,11 @@ function imagesNear(yStart: number, yEnd: number): FloatImage[] {
   return out
 }
 
+/** Any loaded image actually overlapping the band, whatever its bucket range. */
+function anyImageOverlapping(yStart: number, yEnd: number): boolean {
+  return imagesNear(yStart, yEnd).some((im) => im.loaded && im.y < yEnd && im.y + im.h > yStart)
+}
+
 /**
  * The obstruction key of a paragraph: which images overlap its vertical band,
  * plus its page position (B5 makes height depend on page boundaries). Any
@@ -200,7 +207,7 @@ function estimateHeight(paraIndex: number): number {
   return Math.max(1, Math.ceil(chars / perLine)) * LINE_HEIGHT
 }
 
-export function relayout() {
+export function relayout(opts?: { forceFrom?: number; forceTo?: number; all?: boolean }) {
   const relayoutStart = performance.now()
   const dirty = takeDirty()
   // Paragraph indices moved since the last pass: re-key the caches the same way
@@ -208,6 +215,9 @@ export function relayout() {
   for (const shift of takeShifts()) {
     shiftCaches(shift.at, shift.removed, shift.inserted)
     shiftImageAnchors(shift.at, shift.removed, shift.inserted)
+    // The height index is the fourth structure keyed by paragraph index; a
+    // splice it misses is commit 239b1a2's bug (docs/LAZY-LAYOUT.md §3).
+    spliceHeights(shift.at, shift.removed, shift.inserted)
   }
   const cssWidth = docWrap.clientWidth || 800
   const docWidth = Math.max(80, cssWidth - PAD_X * 2)
@@ -222,7 +232,49 @@ export function relayout() {
   if (dirty === 'all') {
     // Index shifts (splits/merges/imports) invalidate every cache entry.
     for (const k of Object.keys(paraCache)) delete paraCache[+k]
+    // A document replaced wholesale may have any length; drop the old index
+    // rather than letting its stale entries linger past the new count, then
+    // size it for the new one so the walk's setHeight calls stay O(log n).
+    resetHeights()
+    prepareHeights(n)
   }
+
+  // ---- which paragraphs get real lines this pass (docs/LAZY-LAYOUT.md §4) --
+  // Only the band around the viewport — widened by the dirty range and any
+  // forced range (a caret answer, a tab jump) — is materialized. Everything
+  // else keeps its estimate in the height index and emits no lines, so
+  // `view.lines` is a window, not the document. The window is computed from
+  // the index of the previous pass, which the walk below agrees with by
+  // construction (both come from the same arithmetic), so a paragraph that is
+  // visible is always in the window.
+  const scrollTop = docWrap.scrollTop
+  const viewportH = docWrap.clientHeight || 600
+  const margin = viewportH * 2
+  let materializeFrom: number
+  let materializeTo: number
+  if (opts?.all) {
+    materializeFrom = 0
+    materializeTo = n - 1
+  } else {
+    const docTop = visualToDocY(Math.max(0, scrollTop - PAD_Y - margin))
+    const docBottom = visualToDocY(Math.max(0, scrollTop - PAD_Y + viewportH + margin))
+    materializeFrom = paragraphAtY(docTop)
+    materializeTo = paragraphAtY(docBottom)
+    if (opts?.forceFrom !== undefined) materializeFrom = Math.min(materializeFrom, Math.max(0, opts.forceFrom))
+    if (opts?.forceTo !== undefined) materializeTo = Math.max(materializeTo, opts.forceTo)
+  }
+  const dirtyFrom = dirty === 'all' ? 0 : dirty ? dirty.from : n
+  const dirtyTo = dirty === 'all' ? n - 1 : dirty ? dirty.to : -1
+  if (dirty !== null && dirty !== 'all') {
+    materializeFrom = Math.min(materializeFrom, dirty.from)
+    materializeTo = Math.max(materializeTo, dirty.to)
+  }
+  // The paragraph at the top of the viewport, per the index *before* this pass.
+  // Materializing paragraphs above it turns their estimates into measurements,
+  // which moves everything below it — the reader's content included — so the
+  // scroll must follow by the same amount (LAZY-LAYOUT.md §4).
+  const paraAtTop = paragraphAtY(visualToDocY(Math.max(0, scrollTop - PAD_Y)))
+  let scrollCorrection = 0
 
   const lines: LineInfo[] = []
   const sectionsOut: SectionLayout[] = []
@@ -231,13 +283,16 @@ export function relayout() {
   // "the document changed" from "the document moved" in the trace.
   let refits = 0
   const refitReasons: Record<string, number> = {}
+  let replaces = 0
   let translations = 0
+  let materializedCount = 0
   let y = 0
-  const dirtyFrom = dirty === 'all' ? 0 : dirty ? dirty.from : n
-  const dirtyTo = dirty === 'all' ? n - 1 : dirty ? dirty.to : -1
-  const maxObstructionBottom = view.images.reduce((m, im) => (im.loaded ? Math.max(m, im.y + im.h) : m), 0)
 
   for (let i = 0; i < n; i++) {
+    // The y the paragraph starts at, before its own fold — what yOf(i) must
+    // return, and the base the height index is written from at the end of the
+    // iteration.
+    const yBeforePara = y
     // A tab opens here (docs/TABS.md): the roll is folded so the section starts
     // on a fresh page — that is what keeps writing in one tab from running into
     // the next one's page — and its title takes the space above the first line.
@@ -248,58 +303,20 @@ export function relayout() {
       y += titleBlockHeight(mark.level)
     }
     resolveAnchoredImages(i, y)
-    const cached = paraCache[i]
 
-    // Early exit: once past the dirty range and every image band with no
-    // accumulated shift, nothing below can have moved - append the cached lines
-    // verbatim. Validate the entire tail first and only then append: bailing out
-    // half way used to leave the already-pushed lines and the advanced y in
-    // place, so the fall-through re-appended them and doubled the document.
-    if (i > dirtyTo && y > maxObstructionBottom && cached && cached.yStart === y) {
-      let ok = true
-      let probeY = y
-      for (let j = i; j < n; j++) {
-        const c = paraCache[j]
-        // The probe must fold the roll exactly like the loop below does, or a
-        // section start makes every yStart below it look wrong.
-        if (j > i) {
-          const jMark = sectionMarkAt(j)
-          if (jMark) {
-            probeY = Math.ceil(probeY / PAGE_HEIGHT) * PAGE_HEIGHT + titleBlockHeight(jMark.level)
-          }
-          resolveAnchoredImages(j, probeY)
-        }
-        if (
-          !c ||
-          c.yStart !== probeY ||
-          c.docWidth !== docWidth ||
-          c.version !== styleVersion(j) ||
-          c.obstructionKey !== obstructionKey(j, probeY, c.height)
-        ) {
-          ok = false
-          break
-        }
-        probeY += c.height + (j < n - 1 ? PARA_GAP : 0)
-      }
-      if (ok) {
-        for (let j = i; j < n; j++) {
-          // i's own marker was already consumed above; the rest still have to be
-          // folded and recorded, or the tail's tabs vanish from the panel.
-          if (j > i) {
-            const jMark = sectionMarkAt(j)
-            if (jMark) {
-              y = Math.ceil(y / PAGE_HEIGHT) * PAGE_HEIGHT
-              sectionsOut.push({ ...jMark, paraIndex: j, y })
-              y += titleBlockHeight(jMark.level)
-            }
-          }
-          const c = paraCache[j]
-          for (const l of c.lines) lines.push(l)
-          y += c.height + (j < n - 1 ? PARA_GAP : 0)
-        }
-        break
-      }
+    if (i < materializeFrom || i > materializeTo) {
+      // Estimated: no lines this pass. A paragraph materialized in an earlier
+      // pass keeps its measured height — reusing it is what keeps the walk
+      // from drifting away from what the index says. A never-measured
+      // paragraph pays estimateHeight(), the lie that gets corrected the first
+      // time the band above the viewport is measured.
+      const h = paraCache[i]?.height ?? estimateHeight(i)
+      y += h + (i < n - 1 ? PARA_GAP : 0)
+      setHeight(i, y - yBeforePara)
+      continue
     }
+    materializedCount++
+    const cached = paraCache[i]
 
     const version = styleVersion(i)
     const page = Math.floor(y / PAGE_HEIGHT)
@@ -336,22 +353,49 @@ export function relayout() {
       cached.obstructionKey !== key
 
     if (mustRefit) {
-      refits++
-      const reason = inDirty
-        ? 'dirty'
-        : !cached
-          ? 'uncached'
-          : cached.version !== version
-            ? 'version'
-            : cached.docWidth !== docWidth
-              ? 'width'
-              : paginationChanged
-                ? 'page'
-                : 'obstruction'
-      refitReasons[reason] = (refitReasons[reason] ?? 0) + 1
-      const { lines: paraLines, height } = layoutParagraph(doc.paragraphs[i], docWidth, y, i)
-      lines.push(...paraLines)
-      paraCache[i] = { version, docWidth, yStart: y, page, obstructionKey: key, lines: paraLines, height }
+      // Re-place instead of re-break (docs/LAZY-LAYOUT.md §2): the cached
+      // layout is valid in every respect except its y — nothing dirty, same
+      // text and styles, same obstruction — and no image sits in the band at
+      // either position, so the line breaks cannot depend on where the
+      // paragraph sits. Only the page-push rule is y-dependent, and
+      // replaceParagraphLines re-runs exactly that rule at the new y. This is
+      // the branch that used to re-break ~4,800 boundary-touching paragraphs
+      // (two per page boundary) for one Enter near the top.
+      const replace =
+        !inDirty &&
+        cached &&
+        cached.version === version &&
+        cached.docWidth === docWidth &&
+        paginationChanged &&
+        cached.obstructionKey === key &&
+        !anyImageOverlapping(cached.yStart, cached.yStart + cached.height) &&
+        !anyImageOverlapping(y, y + cached.height)
+      if (replace) {
+        replaces++
+        const paraLines = cached.lines
+        // In place: the same contract the translate path below relies on — the
+        // entry's lines and its yStart must never disagree.
+        const height = replaceParagraphLines(paraLines, y, doc.blockAttrs[i] ?? defaultBlockAttrs())
+        for (const l of paraLines) lines.push(l)
+        paraCache[i] = { version, docWidth, yStart: y, page, obstructionKey: key, lines: paraLines, height }
+      } else {
+        refits++
+        const reason = inDirty
+          ? 'dirty'
+          : !cached
+            ? 'uncached'
+            : cached.version !== version
+              ? 'version'
+              : cached.docWidth !== docWidth
+                ? 'width'
+                : paginationChanged
+                  ? 'page'
+                  : 'obstruction'
+        refitReasons[reason] = (refitReasons[reason] ?? 0) + 1
+        const { lines: paraLines, height } = layoutParagraph(doc.paragraphs[i], docWidth, y, i)
+        lines.push(...paraLines)
+        paraCache[i] = { version, docWidth, yStart: y, page, obstructionKey: key, lines: paraLines, height }
+      }
     } else if (cached.yStart !== y) {
       translations++
       // Position-independent: translate instead of re-fitting. The cached lines
@@ -372,6 +416,17 @@ export function relayout() {
     }
 
     y += paraCache[i].height + (i < n - 1 ? PARA_GAP : 0)
+    // Exact by construction: the walk's y advanced by exactly the paragraph's
+    // offset (height + gap + fold padding + title), so store that delta.
+    setHeight(i, y - yBeforePara)
+    // Scroll correction: a paragraph above the viewport top went from estimate
+    // to measured this pass — everything below it (the reader's content
+    // included) moves by the difference, so the scroll has to follow. A dirty
+    // paragraph is excluded: its height change is a real edit, which must push
+    // content, not be compensated away.
+    if (i < paraAtTop && !cached && !(dirty !== null && i >= dirtyFrom && i <= dirtyTo)) {
+      scrollCorrection += paraCache[i].height - estimateHeight(i)
+    }
   }
 
   view.lines = lines
@@ -396,13 +451,26 @@ export function relayout() {
     dirty: dirty === 'all' ? 'all' : dirty ? `${dirty.from}-${dirty.to}` : 'none',
     refits,
     refitReasons,
+    replaces,
     translations,
     paragraphs: n,
     lines: lines.length,
     sections: sectionsOut.length,
     images: view.images.length,
     docHeight: Math.round(docHeight),
+    materialized: materializedCount,
+    scrollCorrection: Math.round(scrollCorrection * 100) / 100,
   })
+
+  // Keep the document Y that was at the top of the viewport exactly where it
+  // was, in visual space. Getting this wrong makes the document creep or
+  // judder while scrolling up (docs/LAZY-LAYOUT.md §4); the conversion through
+  // docToVisualY matters because a correction that crosses a page boundary
+  // also crosses a PAGE_GAP.
+  if (scrollCorrection !== 0) {
+    const oldTopY = yOf(paraAtTop) - scrollCorrection
+    docWrap.scrollTop += docToVisualY(oldTopY + scrollCorrection) - docToVisualY(oldTopY)
+  }
 
   const pageCount = Math.max(1, Math.ceil(docHeight / PAGE_HEIGHT))
   const visualHeight = pageCount * PAGE_HEIGHT + (pageCount - 1) * PAGE_GAP
@@ -411,7 +479,6 @@ export function relayout() {
   // B4: the canvas is viewport-sized inside a scrolling spacer; the spacer
   // carries the full document height.
   const dpr = window.devicePixelRatio || 1
-  const viewportH = docWrap.clientHeight || 600
   canvas.style.width = cssWidth + 'px'
   canvas.style.height = viewportH + 'px'
   canvas.width = Math.max(1, Math.round(cssWidth * dpr))
@@ -437,4 +504,34 @@ export function scheduleRelayout() {
     pendingRelayout = false
     relayout()
   })
+}
+
+// Lazy layout reentrancy guard (docs/LAZY-LAYOUT.md §4): relayout ends by
+// drawing, and drawing answers the caret, which may ask to materialize a
+// paragraph — which must not start a second pass from inside the first.
+let materializing = false
+
+/**
+ * Lay out one paragraph's band right now, even far outside the viewport
+ * window. The caret and the tab jump need a paragraph's lines the moment they
+ * are asked for, not after a scroll; without this, lineForCursor and
+ * pixelToCursor "fail not found" for a paragraph that merely sits far away.
+ */
+export function materializeParagraph(paraIndex: number): void {
+  if (materializing) return
+  materializing = true
+  try {
+    relayout({ forceFrom: paraIndex, forceTo: paraIndex })
+  } finally {
+    materializing = false
+  }
+}
+
+/**
+ * The eager path, kept alive on purpose (docs/LAZY-LAYOUT.md §4-5): lay out
+ * the whole document. The exporters call it — an export is the whole document
+ * by definition — and the differential gate uses it as the oracle.
+ */
+export function materializeAll(): void {
+  relayout({ all: true })
 }

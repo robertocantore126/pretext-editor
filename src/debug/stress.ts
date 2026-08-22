@@ -13,7 +13,14 @@
 //    silhouettes all vary, because that is what a real document does.
 
 import { addImageFromDataURL, clearImages } from '../images/images'
-import { auditObstructionIndex, relayout } from '../layout/engine'
+import { auditObstructionIndex, materializeAll, relayout } from '../layout/engine'
+import { layoutParagraph, replaceParagraphLines } from '../layout/paragraph'
+import { paraCache } from '../layout/cache'
+import { yOf, totalHeight, paragraphAtY } from '../layout/heights'
+import { titleBlockHeight } from '../render/title'
+import { DEFAULT_FIRST_TITLE } from '../model/sections'
+import { FONT_SIZE, LINE_HEIGHT, PAGE_HEIGHT, PARA_GAP } from '../config'
+import { defaultBlockAttrs } from '../state/doc'
 import { applyEdit, resetDocument } from '../model/document'
 import { markAllDirty } from '../model/dirty'
 import { newSectionId, setSectionMark } from '../model/sections'
@@ -21,10 +28,11 @@ import { applySelectionMark } from '../model/styles'
 import { draw } from '../render/draw'
 import { doc } from '../state/doc'
 import { view } from '../state/view'
+import type { LineInfo } from '../types'
 import { docWrap } from '../dom'
 import { PAD_X, PAD_Y } from '../config'
 import { paragraphTop, pointerToDocument } from '../layout/coords'
-import { pixelToCursor } from '../layout/caret-position'
+import { caretPixelPosition, pixelToCursor } from '../layout/caret-position'
 import { docToVisualY } from '../layout/pagination'
 import { trace } from './tracer'
 
@@ -220,12 +228,15 @@ export async function runStressBenchmark(): Promise<StressReport> {
     pagesRendered: Math.max(1, Math.ceil(view.docHeight / 1060)),
   }
 
-  // Full relayout, three times: the first pays for cold caches.
+  // Full eager layout, three times: the first pays for cold caches. With lazy
+  // layout (docs/LAZY-LAYOUT.md) a plain relayout() materializes only the
+  // viewport window, so the whole-document cost is measured through
+  // materializeAll() — the exporters' path — on purpose.
   const full: number[] = []
   for (let i = 0; i < 3; i++) {
     markAllDirty()
     const t = performance.now()
-    relayout()
+    materializeAll()
     full.push(Math.round((performance.now() - t) * 100) / 100)
   }
 
@@ -294,6 +305,11 @@ export async function runStressBenchmark(): Promise<StressReport> {
 
   // Correctness under load, not just speed: a stress run that gets fast answers
   // wrong is worse than a slow one.
+  //
+  // With lazy layout these checks iterate view.lines, which holds only the
+  // materialized window plus whatever was forced by the edits above — checking
+  // exactly what the engine had an opinion about, which is the correct scope
+  // (docs/LAZY-LAYOUT.md §4).
   let violations = 0
   for (const line of view.lines) {
     const source = doc.paragraphs[line.paraIndex]
@@ -476,6 +492,265 @@ export function runEditFuzz(steps = 300, seed = 3): { steps: number; failures: u
   return result
 }
 
+/**
+ * Differential gate for the re-place path (docs/LAZY-LAYOUT.md §2): for `samples`
+ * randomly chosen paragraphs with no image in their band, lay the paragraph out
+ * at a random y, re-place the cached lines at a second y, and re-break it there
+ * too — the two must be identical in text, offsets, x, yTop and height. Any
+ * difference means the guard that decides when re-placing is safe is wrong, not
+ * that the comparison is too strict.
+ */
+export function compareReplaceAgainstRefit(
+  samples = 500
+): {
+  checked: number
+  skipped: number
+  mismatches: Array<{ paraIndex: number; kind: string; detail: Record<string, unknown> }>
+} {
+  const rand = mulberry32(12345)
+  const mismatches: Array<{ paraIndex: number; kind: string; detail: Record<string, unknown> }> = []
+  let checked = 0
+  let skipped = 0
+  const n = doc.paragraphs.length
+  const maxY = Math.max(1, view.docHeight)
+  for (let s = 0; s < samples && checked + skipped < samples * 4; s++) {
+    const i = Math.floor(rand() * n)
+    const text = doc.paragraphs[i]
+    // A random y, and a second one a non-page amount below it — the Enter-like
+    // shift that makes boundary-touching paragraphs re-break today.
+    const y0 = Math.floor(rand() * maxY)
+    const y1 = y0 + (1 + Math.floor(rand() * 60))
+    const at0 = layoutParagraph(text, view.docWidth, y0, i)
+    // The guard's precondition: no image may overlap the band at either y, or
+    // the breaks themselves change and re-placing is not allowed.
+    const noImage = (y: number) =>
+      !view.images.some((im) => im.loaded && im.y < y + at0.height && im.y + im.h > y)
+    if (!noImage(y0) || !noImage(y1)) {
+      skipped++
+      continue
+    }
+    const attrs = doc.blockAttrs[i] ?? defaultBlockAttrs()
+    // Re-place mutates the lines in place — that is the point — so capture the
+    // re-placed height before comparing the re-placed lines against the refit.
+    const height = replaceParagraphLines(at0.lines, y1, attrs)
+    const refit = layoutParagraph(text, view.docWidth, y1, i)
+    checked++
+    if (height !== refit.height) {
+      mismatches.push({ paraIndex: i, kind: 'height', detail: { replaced: height, refit: refit.height, y0, y1 } })
+      continue
+    }
+    for (let k = 0; k < Math.max(at0.lines.length, refit.lines.length); k++) {
+      const a = at0.lines[k]
+      const b = refit.lines[k]
+      const shape = (l: LineInfo | undefined) =>
+        l
+          ? { text: l.text, startOffset: l.startOffset, endOffset: l.endOffset, x: l.x, yTop: l.yTop, height: l.height }
+          : null
+      if (!a || !b || a.text !== b.text || a.startOffset !== b.startOffset || a.endOffset !== b.endOffset || a.x !== b.x || a.yTop !== b.yTop || a.height !== b.height) {
+        mismatches.push({ paraIndex: i, kind: 'line', detail: { index: k, replaced: shape(a), refit: shape(b), y0, y1 } })
+        break
+      }
+    }
+    if (mismatches.length >= 10) break
+  }
+  return { checked, skipped, mismatches }
+}
+
+/**
+ * Gate for the height index (docs/LAZY-LAYOUT.md §3): yOf(i) must equal the y
+ * the eager walk produces, for every i. This is a second, independent
+ * implementation of the walk — same fold/title/gap arithmetic — so the gate
+ * catches a fold accounting error that a self-consistent index would hide.
+ */
+/**
+ * A replica of the engine's estimateHeight — the gate is a second
+ * implementation on purpose, so a divergence here from the engine's arithmetic
+ * is a real bug, not a copy of it.
+ */
+function gateEstimateHeight(paraIndex: number): number {
+  const chars = doc.paragraphs[paraIndex]?.length ?? 0
+  const perLine = Math.max(1, Math.floor(view.docWidth / (FONT_SIZE * 0.5)))
+  return Math.max(1, Math.ceil(chars / perLine)) * LINE_HEIGHT
+}
+
+/**
+ * Gate for the height index (docs/LAZY-LAYOUT.md §3): yOf(i) must equal the y
+ * the eager walk produces, for every i. The comparison is against a second,
+ * independent implementation of the walk — same fold/title/gap arithmetic — so
+ * it catches a fold accounting error that a self-consistent index would hide.
+ * The document is fully materialized first: with lazy layout the engine's walk
+ * mixes estimates into the index on purpose, and the gate is about the index
+ * agreeing with a *measured* walk, not with a walk of estimates.
+ */
+export function checkHeightIndex(): {
+  checked: number
+  mismatches: Array<{ i: number; expected: number; actual: number }>
+  totalExpected: number
+  totalActual: number
+} {
+  materializeAll()
+  const n = doc.paragraphs.length
+  const mismatches: Array<{ i: number; expected: number; actual: number }> = []
+  let y = 0
+  for (let i = 0; i < n; i++) {
+    // y here is yOf(i): the walk's position before paragraph i's own fold.
+    const expected = y
+    const actual = yOf(i)
+    if (Math.abs(expected - actual) > 0.5) mismatches.push({ i, expected, actual })
+    // The inverse: the paragraph a document Y at a paragraph start lands in.
+    if (paragraphAtY(actual) !== i) {
+      mismatches.push({ i, expected, actual: paragraphAtY(actual) })
+    }
+    const mark =
+      doc.blockAttrs[i]?.section ??
+      (i === 0 ? { id: 'implicit-first', title: DEFAULT_FIRST_TITLE, level: 0 as const } : undefined)
+    if (mark) {
+      if (i > 0) y = Math.ceil(y / PAGE_HEIGHT) * PAGE_HEIGHT
+      y += titleBlockHeight(mark.level)
+    }
+    y += (paraCache[i]?.height ?? gateEstimateHeight(i)) + (i < n - 1 ? PARA_GAP : 0)
+  }
+  return { checked: n, mismatches, totalExpected: y, totalActual: totalHeight() }
+}
+
+/**
+ * The gate that decides whether the lazy layout is done (docs/LAZY-LAYOUT.md
+ * §4): lazy and eager must agree wherever lazy has an opinion.
+ *
+ * Build the document, materialize everything and snapshot every line. Rebuild
+ * the same document and scroll it from top to bottom — materializing as the
+ * window passes, which measures the estimates into reality — asserting at each
+ * sampled position that every materialized line is identical to the snapshot
+ * (text, offsets, x, yTop, height). Then re-scroll to random positions and
+ * assert the same, and finally materialize everything and assert the docHeight
+ * equals the eager one exactly.
+ */
+export async function compareLazyAgainstEager(
+  options: StressOptions = {}
+): Promise<{
+  snapshotted: number
+  positions: number
+  checks: number
+  mismatches: Array<Record<string, unknown>>
+  docHeightExact: boolean
+}> {
+  const mismatches: Array<Record<string, unknown>> = []
+  const shape = (l: LineInfo) => ({
+    text: l.text.slice(0, 40),
+    startOffset: l.startOffset,
+    endOffset: l.endOffset,
+    x: l.x,
+    yTop: l.yTop,
+    height: l.height,
+  })
+
+  // 1. The eager oracle: everything materialized, every line snapshotted.
+  await generateStressDocument(options)
+  materializeAll()
+  const eagerDocHeight = view.docHeight
+  const snapshot = new Map<string, LineInfo>()
+  for (const l of view.lines) snapshot.set(`${l.paraIndex}:${l.startOffset}:${l.endOffset}`, l)
+
+  // 2. Rebuild the same document, fresh: only the window is materialized now.
+  await generateStressDocument(options)
+
+  let checks = 0
+  const checkLines = (tag: string) => {
+    for (const line of view.lines) {
+      checks++
+      const eager = snapshot.get(`${line.paraIndex}:${line.startOffset}:${line.endOffset}`)
+      if (
+        !eager ||
+        eager.text !== line.text ||
+        eager.x !== line.x ||
+        eager.yTop !== line.yTop ||
+        eager.height !== line.height
+      ) {
+        mismatches.push({ tag, paraIndex: line.paraIndex, lazy: shape(line), eager: eager ? shape(eager) : null })
+        return
+      }
+    }
+  }
+
+  // 3. Scroll from the top to the bottom in steps small enough that every
+  //    paragraph above a sample position was materialized by an earlier window:
+  //    the estimates are measured as the window passes over them, so the walk
+  //    below each sample is exact and the lines must match the snapshot.
+  let positions = 0
+  const step = 800
+  for (let pos = 0; pos <= eagerDocHeight && mismatches.length === 0; pos += step) {
+    docWrap.scrollTop = pos
+    relayout()
+    positions++
+    checkLines('scroll ' + pos)
+  }
+
+  // 4. Random re-scrolls: everything is materialized by now, so any position
+  //    must reproduce the snapshot exactly.
+  const rand = mulberry32(77)
+  for (let k = 0; k < 8 && mismatches.length === 0; k++) {
+    docWrap.scrollTop = Math.floor(rand() * eagerDocHeight)
+    relayout()
+    positions++
+    checkLines('random')
+  }
+
+  // 5. Full materialization reproduces the eager document exactly.
+  materializeAll()
+  checkLines('full')
+  const docHeightExact = view.docHeight === eagerDocHeight
+  return { snapshotted: snapshot.size, positions, checks, mismatches, docHeightExact }
+}
+
+/**
+ * Definition of done #3 (docs/LAZY-LAYOUT.md §7): scrolling from the top to the
+ * bottom of the reference document and back leaves the caret on the same
+ * character and the same text under the pointer — measured, not eyeballed.
+ */
+export function checkScrollStability(): { failures: string[] } {
+  const failures: string[] = []
+  materializeAll()
+  const target = Math.min(doc.paragraphs.length - 1, Math.floor(doc.paragraphs.length * 0.6))
+  const text = doc.paragraphs[target]
+  const offset = Math.min(text.length, Math.max(1, Math.floor(text.length / 2)))
+  doc.cursor = { para: target, offset }
+  const before = caretPixelPosition()
+  if (!before) {
+    failures.push('caret has no position before the scroll')
+    return { failures }
+  }
+  const beforeCursor = pixelToCursor(before.x, before.y)
+  const caretVisualTop = PAD_Y + docToVisualY(paragraphTop(target))
+  docWrap.scrollTop = view.docHeight // bottom
+  relayout()
+  docWrap.scrollTop = 0 // top
+  relayout()
+  docWrap.scrollTop = Math.max(0, caretVisualTop - 80) // back to the caret
+  relayout()
+  const after = caretPixelPosition()
+  const afterCursor = pixelToCursor(before.x, before.y)
+  if (!after || Math.abs(after.x - before.x) > 0.5 || Math.abs(after.y - before.y) > 0.5) {
+    failures.push(
+      `caret moved: before ${before.x.toFixed(1)},${before.y.toFixed(1)} after ${after ? after.x.toFixed(1) + ',' + after.y.toFixed(1) : 'null'}`
+    )
+  }
+  if (afterCursor.para !== beforeCursor.para || afterCursor.offset !== beforeCursor.offset) {
+    failures.push(
+      `text under pointer changed: before ${beforeCursor.para}:${beforeCursor.offset} after ${afterCursor.para}:${afterCursor.offset}`
+    )
+  }
+  return { failures }
+}
+
 export function installStressHarness(): void {
-  ;(window as any).pretextStress = { generate: generateStressDocument, benchmark: runStressBenchmark, run: runStress, fuzz: runEditFuzz }
+  ;(window as any).pretextStress = {
+    generate: generateStressDocument,
+    benchmark: runStressBenchmark,
+    run: runStress,
+    fuzz: runEditFuzz,
+    compareReplaceAgainstRefit,
+    checkHeightIndex,
+    compareLazyAgainstEager,
+    checkScrollStability,
+  }
 }
