@@ -12,7 +12,8 @@ import { downloadTrace, installTracer } from './debug/tracer'
 import { installStressHarness } from './debug/stress'
 import { initTabsPanel } from './ui/tabs-panel'
 import { initHistory } from './edit/history'
-import { applySelectionMark, toggleHeadlineForPara } from './edit/marks'
+import { applySelectionDecoration, applySelectionMark, toggleHeadlineForPara } from './edit/marks'
+import { decorations } from './model/decorations'
 import { clearImages, initImageInteractions } from './images/images'
 import { initClipboard } from './input/clipboard'
 import { initKeyboard } from './input/keyboard'
@@ -40,6 +41,18 @@ document.getElementById('btn-bold')!.addEventListener('click', () => applySelect
 document.getElementById('btn-italic')!.addEventListener('click', () => applySelectionMark('italic'))
 document.getElementById('btn-underline')!.addEventListener('click', () => applySelectionMark('underline'))
 document.getElementById('btn-headline')!.addEventListener('click', () => toggleHeadlineForPara())
+
+// Hand-drawn underlines: the list comes from the registry, so importing your own
+// puts it in this menu without touching the toolbar (model/decorations.ts).
+const decoSelect = document.getElementById('sel-deco') as HTMLSelectElement
+decoSelect.innerHTML =
+  '<option value="">Sottolineatura…</option><option value="plain">Riga dritta</option>' +
+  decorations().map((d) => `<option value="${d.id}">${d.label}</option>`).join('')
+decoSelect.addEventListener('change', () => {
+  const value = decoSelect.value
+  if (value) applySelectionDecoration(value === 'plain' ? null : value)
+  decoSelect.value = ''
+})
 
 document.getElementById('btn-export')!.addEventListener('click', async () => {
   try {

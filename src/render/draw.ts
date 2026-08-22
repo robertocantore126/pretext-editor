@@ -20,6 +20,7 @@ import { view } from '../state/view'
 import { updateCaretDom } from './caret'
 import { drawSectionTitles, titleBlockHeight } from './title'
 import { notifySections } from '../model/sections'
+import { decoration, decorationPolyline } from '../model/decorations'
 
 /** The tab the caret was in on the previous paint (docs/TABS.md). */
 let lastActiveSectionId: string | null = null
@@ -212,13 +213,34 @@ export function draw() {
       }
       const runEnd = xPos
       if (style.underline) {
-        const uy = baselineY + 2
-        ctx.strokeStyle = style.color
-        ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.moveTo(runStart, uy)
-        ctx.lineTo(runEnd, uy)
-        ctx.stroke()
+        const custom = decoration(style.decoration)
+        if (custom) {
+          // A hand-drawn underline is painted per *fragment*, which is what a
+          // wrapped word gives us: the mark restarts on the next line instead of
+          // trailing a tail that belongs to text one line up.
+          const { points, thickness } = decorationPolyline(custom, runEnd - runStart, fontSize)
+          ctx.strokeStyle = style.color
+          ctx.lineWidth = thickness
+          ctx.lineJoin = 'round'
+          ctx.lineCap = 'round'
+          ctx.beginPath()
+          points.forEach(([px, py], i) => {
+            const X = runStart + px
+            const Y = baselineY + py
+            if (i === 0) ctx.moveTo(X, Y)
+            else ctx.lineTo(X, Y)
+          })
+          ctx.stroke()
+          ctx.lineWidth = 1
+        } else {
+          const uy = baselineY + 2
+          ctx.strokeStyle = style.color
+          ctx.lineWidth = 1
+          ctx.beginPath()
+          ctx.moveTo(runStart, uy)
+          ctx.lineTo(runEnd, uy)
+          ctx.stroke()
+        }
       }
       if (style.strike) {
         ctx.strokeStyle = style.color

@@ -24,6 +24,8 @@ export interface Style {
   letterSpacing: number
   baseline: 'normal' | 'super' | 'sub'
   linkHref: string | null
+  /** Hand-drawn underline id (model/decorations.ts), null for the plain rule. */
+  decoration: string | null
 }
 
 export interface StyleRun extends Style {
@@ -58,6 +60,7 @@ function styleFromEntry(e: InlineStyle): Style {
     letterSpacing: e.letterSpacing,
     baseline: e.baseline,
     linkHref: e.linkHref,
+    decoration: e.decoration,
   }
 }
 
@@ -136,7 +139,8 @@ export function sameStyle(a: Style, b: Style): boolean {
     a.fontWeight === b.fontWeight &&
     a.letterSpacing === b.letterSpacing &&
     a.baseline === b.baseline &&
-    a.linkHref === b.linkHref
+    a.linkHref === b.linkHref &&
+    a.decoration === b.decoration
   )
 }
 

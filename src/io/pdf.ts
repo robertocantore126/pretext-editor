@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf'
 import { FONT, FONT_FAMILY, FONT_SIZE, INK, LINE_HEIGHT, PAD_X, PAGE_HEIGHT } from '../config'
 import { measureCtx } from '../dom'
 import { convertImageToDataURL } from '../images/images'
+import { decoration, decorationPolyline } from '../model/decorations'
 import { fontForStyle, getStyleRunsInRange, styleFontSize } from '../model/runs'
 import { doc } from '../state/doc'
 import { titleFont, titleFontSize, TITLE_SPACE_ABOVE } from '../render/title'
@@ -380,6 +381,32 @@ export async function exportPDF() {
       cx += w + charSpace * [...span.text].length
     }
   }
+  /**
+   * A hand-drawn underline (model/decorations.ts), transcribed. The polyline
+   * comes from the same function the canvas uses, so the PDF cannot draw a
+   * different squiggle than the screen — only in points instead of pixels.
+   */
+  const drawDecoration = (
+    _pdf: typeof pdf,
+    def: NonNullable<ReturnType<typeof decoration>>,
+    xStart: number,
+    baselineYPx: number,
+    width: number,
+    fontSize: number,
+    css: string
+  ) => {
+    const { points, thickness } = decorationPolyline(def, width, fontSize)
+    if (points.length < 2) return
+    const [r, g, b] = toRGB(css)
+    pdf.setDrawColor(r, g, b)
+    pdf.setLineWidth(thickness * PT)
+    pdf.setLineJoin('round')
+    pdf.setLineCap('round')
+    // jsPDF's lines() takes deltas from a starting point.
+    const deltas = points.slice(1).map(([px, py], i) => [(px - points[i][0]) * PT, (py - points[i][1]) * PT])
+    pdf.lines(deltas, (xStart + points[0][0]) * PT, (baselineYPx + points[0][1]) * PT)
+    pdf.setLineWidth(1 * PT)
+  }
   const rule = (x0: number, x1: number, y: number, css: string) => {
     const [r, g, b] = toRGB(css)
     pdf.setDrawColor(r, g, b)
@@ -469,7 +496,11 @@ export async function exportPDF() {
         }
 
         const runEnd = xPos
-        if (style.underline) rule(runStart, runEnd, baselineY + 2, style.color)
+        if (style.underline) {
+          const custom = decoration(style.decoration)
+          if (custom) drawDecoration(pdf, custom, runStart, baselineY, runEnd - runStart, styleFontSize(style), style.color)
+          else rule(runStart, runEnd, baselineY + 2, style.color)
+        }
         if (style.strike) rule(runStart, runEnd, baselineY - fontSize * 0.42, style.color)
       }
     }

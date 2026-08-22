@@ -23,6 +23,7 @@ export function defaultStyle(): InlineStyle {
     letterSpacing: 0,
     baseline: 'normal',
     linkHref: null,
+    decoration: null,
     headline: false,
   }
 }

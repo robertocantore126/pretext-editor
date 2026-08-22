@@ -34,6 +34,7 @@ function styleKey(s: InlineStyle): string {
     Math.round(s.letterSpacing * 100) / 100,
     s.baseline,
     s.linkHref,
+    s.decoration,
     s.headline,
   ])
 }
@@ -99,6 +100,19 @@ export function applySelectionMark(kind: 'bold' | 'italic' | 'underline'): Style
     alert('Seleziona il testo prima di applicare il formato.')
     return []
   }
+  // A shortcut has to toggle: Ctrl+B, type, Ctrl+B again is how every editor
+  // works, and a mark that can only be switched on is unusable from the
+  // keyboard. Set it when any character in the selection lacks it, clear it
+  // when they all have it — the same rule toggleHeadlineForPara already uses.
+  const has = (s: InlineStyle) => (kind === 'bold' ? s.fontWeight >= 600 : kind === 'italic' ? s.italic : s.underline)
+  let allHave = true
+  for (const r of ranges) {
+    const ids = doc.styleIds[r.para]
+    if (!ids) continue
+    for (let i = r.start; i < r.end && allHave; i++) if (!has(styleEntry(ids[i]))) allHave = false
+  }
+  const turnOn = !allHave
+
   const edits: StyleEdit[] = []
   for (const r of ranges) {
     const ids = doc.styleIds[r.para]
@@ -107,9 +121,9 @@ export function applySelectionMark(kind: 'bold' | 'italic' | 'underline'): Style
     for (let i = r.start; i < r.end; i++) {
       const entry = styleEntry(ids[i])
       const modified: InlineStyle = { ...entry }
-      if (kind === 'bold') modified.fontWeight = 700
-      else if (kind === 'italic') modified.italic = true
-      else modified.underline = true
+      if (kind === 'bold') modified.fontWeight = turnOn ? 700 : 400
+      else if (kind === 'italic') modified.italic = turnOn
+      else modified.underline = turnOn
       ids[i] = internStyle(modified)
     }
     edits.push({ para: r.para, before, after: ids.slice() })
@@ -162,3 +176,33 @@ export function toggleHeadlineForPara(): StyleEdit[] {
   notifyChanged()
   return edits
 }
+
+/**
+ * Give the selection a hand-drawn underline (model/decorations.ts), or take it
+ * away with null. The decoration implies the underline: a mark that is drawn
+ * but not switched on would be invisible, and switching underline off has to
+ * take its decoration with it.
+ */
+export function applySelectionDecoration(id: string | null): StyleEdit[] {
+  const ranges = getSelectionRanges()
+  if (ranges.length === 0) {
+    alert('Seleziona il testo prima di applicare la sottolineatura.')
+    return []
+  }
+  const edits: StyleEdit[] = []
+  for (const r of ranges) {
+    const ids = doc.styleIds[r.para]
+    if (!ids || r.end <= r.start) continue
+    const before = ids.slice()
+    for (let i = r.start; i < r.end; i++) {
+      const entry = styleEntry(ids[i])
+      ids[i] = internStyle({ ...entry, decoration: id, underline: id !== null ? true : entry.underline })
+    }
+    edits.push({ para: r.para, before, after: ids.slice() })
+    markParagraphDirty(r.para)
+  }
+  doc.selection = null
+  notifyChanged()
+  return edits
+}
+

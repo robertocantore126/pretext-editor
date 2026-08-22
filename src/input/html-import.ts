@@ -87,6 +87,8 @@ function styleFromComputed(el: HTMLElement, ctx: WalkContext): InlineStyle {
   const ls = parseFloat(cs.letterSpacing)
   const va = cs.verticalAlign
   return {
+    // Pasted HTML has no hand-drawn underlines: CSS cannot express one.
+    decoration: null,
     fontFamily: cs.fontFamily,
     fontSize: parseFloat(cs.fontSize) || defaultStyle().fontSize,
     fontWeight: Number.isFinite(w) ? w : 400,

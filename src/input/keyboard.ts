@@ -12,6 +12,7 @@ import {
   moveVertical,
   splitParagraphAtCursor,
 } from '../edit/ops'
+import { applySelectionMark } from '../edit/marks'
 import { getComposition, isComposing, setComposition } from '../model/composition'
 import { addImageFromFile, deleteImage, deselectImage } from '../images/images'
 import { draw } from '../render/draw'
@@ -86,6 +87,20 @@ export function initKeyboard() {
     // Editing keys must not fire while an IME composition is in flight - the
     // Enter/arrows/backspace belong to the IME until it commits.
     if (isComposing()) return
+
+    // Formatting shortcuts. Same entry point as the toolbar buttons, so one
+    // Ctrl+Z undoes a keyboard bold exactly like a clicked one.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const mark = ({ b: 'bold', i: 'italic', u: 'underline' } as const)[e.key.toLowerCase()]
+      if (mark) {
+        // The browser has its own bold/italic/underline on a focused textarea;
+        // without this it would fight us for the keystroke.
+        e.preventDefault()
+        applySelectionMark(mark)
+        repositionGhostInput()
+        return
+      }
+    }
 
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault()

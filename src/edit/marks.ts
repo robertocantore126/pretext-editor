@@ -3,11 +3,23 @@
 // edits into history from the edit layer.
 
 import { relayout } from '../layout/engine'
-import { applySelectionMark as applyMark, toggleHeadlineForPara as toggleHeadline } from '../model/styles'
+import {
+  applySelectionDecoration as applyDecoration,
+  applySelectionMark as applyMark,
+  toggleHeadlineForPara as toggleHeadline,
+} from '../model/styles'
 import { recordStyleEdit } from './history'
 
 export function applySelectionMark(kind: 'bold' | 'italic' | 'underline'): void {
   const edits = applyMark(kind)
+  if (edits.length > 0) {
+    recordStyleEdit(edits)
+    relayout()
+  }
+}
+
+export function applySelectionDecoration(id: string | null): void {
+  const edits = applyDecoration(id)
   if (edits.length > 0) {
     recordStyleEdit(edits)
     relayout()

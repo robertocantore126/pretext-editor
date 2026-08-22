@@ -1,6 +1,8 @@
 import { FONT, FONT_FAMILY, INK, PAD_X, PAD_Y, PAGE_GAP, PAGE_HEIGHT } from '../config'
 import { convertImageToDataURL } from '../images/images'
-import { getStyleRunsInRange } from '../model/runs'
+import { decoration, decorationPolyline } from '../model/decorations'
+import { getStyleRunsInRange, styleFontSize } from '../model/runs'
+import { measureTextWidthOnPara } from '../measure'
 import { titleFont, TITLE_SPACE_ABOVE } from '../render/title'
 import { view } from '../state/view'
 
@@ -43,6 +45,7 @@ export async function exportHTML() {
   .page{position:relative;width:${pageW}px;height:${PAGE_HEIGHT + PAD_Y * 2}px;background:#f7f5f1;border:1px solid #d3d0c8;margin-bottom:${PAGE_GAP}px;box-sizing:border-box;}
   .line{position:absolute;white-space:pre}
   .doc-title{position:absolute;white-space:pre;color:${INK}}
+  .deco{position:absolute;overflow:visible;pointer-events:none}
   .img{position:absolute}
   `
 
@@ -57,9 +60,29 @@ export async function exportHTML() {
       const left = PAD_X + line.x + (line.justifyOffset || 0)
       // build inner HTML by runs
       let runs: string[] = []
+      // Decorations are drawn beside the text, not inside it: an SVG positioned
+      // over the line, one per decorated run, using the same polyline the canvas
+      // and the PDF use.
+      const decos: string[] = []
       const globalStart = line.startOffset
       for (const style of getStyleRunsInRange(line.paraIndex, globalStart, line.endOffset)) {
-        const segText = escapeHtml(line.text.slice(style.start - globalStart, style.end - globalStart))
+        const raw = line.text.slice(style.start - globalStart, style.end - globalStart)
+        const custom = style.underline ? decoration(style.decoration) : null
+        if (custom) {
+          const runX = measureTextWidthOnPara(line.paraIndex, line.text.slice(0, style.start - globalStart), globalStart)
+          const runW = measureTextWidthOnPara(line.paraIndex, raw, style.start)
+          const size = styleFontSize(style)
+          const { points, thickness } = decorationPolyline(custom, runW, size)
+          const d = points.map(([px, py]) => `${px.toFixed(2)},${py.toFixed(2)}`).join(' ')
+          const maxY = Math.max(...points.map((p) => p[1])) + thickness
+          decos.push(
+            `<svg class="deco" width="${runW.toFixed(2)}" height="${maxY.toFixed(2)}" ` +
+            `style="left:${(left + runX).toFixed(2)}px;top:${(top + size * 0.92).toFixed(2)}px">` +
+            `<polyline points="${d}" fill="none" stroke="${style.color}" stroke-width="${thickness.toFixed(2)}" ` +
+            `stroke-linejoin="round" stroke-linecap="round"/></svg>`
+          )
+        }
+        const segText = escapeHtml(raw)
         let segHtml = segText
         if (style.strike) segHtml = `<s>${segHtml}</s>`
         if (style.underline) segHtml = `<u>${segHtml}</u>`
@@ -82,7 +105,7 @@ export async function exportHTML() {
         const paintedW = line.width + countInteriorGaps(line.text) * line.justifyGap
         lineStyle += `width:${paintedW.toFixed(2)}px;text-align:justify;white-space:normal;`
       }
-      pageInner += `<div class="line" style="${lineStyle}">${runs.join('')}</div>`
+      pageInner += `<div class="line" style="${lineStyle}">${runs.join('')}</div>` + decos.join('')
     }
     // Each tab heads the page it opens, exactly as on screen (docs/TABS.md).
     for (const s of view.sections) {

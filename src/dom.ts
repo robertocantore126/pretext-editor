@@ -19,6 +19,7 @@ toolbar.innerHTML = `
   <button id="btn-italic" type="button">Corsivo</button>
   <button id="btn-underline" type="button">Sottolineato</button>
   <button id="btn-headline" type="button">Titolo</button>
+  <select id="sel-deco" title="Sottolineatura disegnata a mano"></select>
   <button id="btn-export" type="button">Esporta (HTML)</button>
   <button id="btn-export-json" type="button">Esporta JSON</button>
   <button id="btn-export-pdf" type="button">Esporta PDF</button>

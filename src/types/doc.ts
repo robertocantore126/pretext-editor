@@ -28,6 +28,12 @@ export interface InlineStyle {
   letterSpacing: number // px, 0 for 'normal'
   baseline: 'normal' | 'super' | 'sub'
   linkHref: string | null
+  /**
+   * Which hand-drawn underline this run wears (model/decorations.ts), or null
+   * for the plain rule. Only the id lives here: the shape is looked up when
+   * painting, so re-drawing a decoration updates every document that uses it.
+   */
+  decoration: string | null
   /** Legacy whole-paragraph flag; migrates to BlockAttrs.kind='heading' (§4.2). */
   headline: boolean
 }
