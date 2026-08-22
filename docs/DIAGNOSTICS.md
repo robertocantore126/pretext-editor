@@ -217,3 +217,66 @@ accanto allo stesso paragrafo, tre pixel di slot in meno, e su un paragrafo cent
 quei tre pixel finivano nella x. Il generatore ora materializza prima di piazzare le immagini:
 si possono confrontare due build solo se hanno ricevuto lo stesso documento.
 
+---
+
+## 5. Prontuario: cosa scrivere in console
+
+Apri l'editor (il collegamento sul desktop parte su `localhost:5190`, il dev server su
+`localhost:5177`), **F12**, scheda **Console**.
+
+> Lo stress test azzera il documento **e** cancella il salvataggio automatico. Se hai
+> qualcosa dentro, prima **Esporta JSON**.
+
+### La corsa completa
+
+```js
+await pretextStress.run({ pages: 200, images: 40, sections: 8, seed: 7 })
+```
+
+Si legge in quest'ordine:
+
+- **`checks`** — tutto a zero. Se non lo è, il documento è veloce e sbagliato, che è peggio
+  di lento e giusto.
+- **`typing[].medianMs`** e **`structural[].medianMs`** — un carattere e un Invio, in cima, a
+  metà e in fondo. L'Invio in cima è il numero che conta: è il caso in cui tutto il resto del
+  documento potrebbe doversi muovere.
+- **`paint[].drawMs`** — deve restare piatto a qualsiasi altezza di scroll.
+
+Per provare in fretta: `{ pages: 20, images: 8, sections: 3 }`. A 2000 pagine la costruzione
+tiene la pagina ferma una trentina di secondi.
+
+### Generare e misurare separatamente
+
+```js
+await pretextStress.generate({ pages: 500, images: 100, sections: 10, seed: 3 })
+await pretextStress.benchmark()
+```
+
+### I controlli di correttezza
+
+```js
+pretextStress.fuzz(300, 5)                      // 300 modifiche casuali, seme 5 -> failures: []
+await pretextStress.compareLazyAgainstEager()   // mismatches: 0, docHeightExact: true
+pretextStress.compareReplaceAgainstRefit()      // riposizionare == rispezzare
+pretextStress.checkHeightIndex()                // l'albero delle altezze == la camminata
+pretextStress.checkScrollStability()            // il testo non si muove sotto gli occhi
+```
+
+Tutti vogliono un documento già generato.
+
+### Quando qualcosa va storto
+
+```js
+pretextTraceDownload()                 // col testo del documento
+pretextTraceDownload({ text: false })  // solo la forma
+```
+
+Stesso file del bottone **Diagnostica**. Per guardare senza scaricare:
+
+```js
+pretextTrace({ text: false }).events.list.filter(e => e.kind === 'layout').slice(-10)
+```
+
+Le ultime dieci impaginazioni con i millisecondi, l'intervallo sporco e **quanti paragrafi
+sono stati re-impaginati e perché**. È la riga da cui sono usciti gli ultimi due difetti.
+
