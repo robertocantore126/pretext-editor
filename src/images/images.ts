@@ -121,7 +121,10 @@ function createFloatImage(src: string, placement: Placement): FloatImage {
     // where it was put, so editing above carries it along instead of leaving it
     // stranded next to whatever text has slid into that spot.
     anchorImageToText(rec)
-    relayout()
+    // scheduleRelayout, not relayout: importing a document with hundreds of
+    // images used to lay the whole thing out once per image as they decoded.
+    // They arrive in a burst; one pass at the end of the frame is enough.
+    scheduleRelayout()
     buildAlphaMapForImage(rec)
   }
   imgEl.src = src

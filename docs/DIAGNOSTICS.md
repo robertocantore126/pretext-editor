@@ -15,7 +15,7 @@ Cosa registra, nel momento in cui succede e con i numeri che il codice ha davver
 | Tipo | Da dove | Cosa contiene |
 | --- | --- | --- |
 | `edit` | `applyEdit` | paragrafo, offset, caratteri inseriti e cancellati, se ha attraversato un confine, cursore risultante |
-| `layout` | `relayout` | millisecondi, intervallo sporco, paragrafi, righe, schede, immagini, altezza |
+| `layout` | `relayout` | millisecondi, intervallo sporco, paragrafi, righe, schede, immagini, altezza, **quanti paragrafi sono stati re-impaginati e perché** (`refits`, `refitReasons`), quanti solo traslati |
 | `section` | `edit/sections.ts` | aggiunta, rinomina, cancellazione, salto (con y e scrollTop) |
 | `image` | `images.ts` | creazione ed eliminazione, tipo di sorgente |
 | `key` | `keyboard.ts` | **solo il nome del tasto** per i tasti non stampabili e le scorciatoie |
@@ -92,16 +92,27 @@ posizione in cache sbagliata si vede solo alla seconda:
 - i paragrafi restano impilati, cioe' la cima di uno non sta mai sopra il fondo del
   precedente (il **posto** giusto).
 
-Il banco ha anche `checkHitTesting()`: clicca dove ogni riga e' dipinta — sulla riga e nel
-vuoto tra un paragrafo e l'altro — e pretende che il cursore atterri li'. Passa dalla stessa
-conversione del mouse (`layout/coords.ts`), quindi prova la strada vera. Serve perche' la Y
-del documento e quella visiva coincidono in cima e divergono di PAGE_GAP per ogni pagina piu'
-sotto: uno scambio di unita' e' invisibile a pagina uno e ti teletrasporta a pagina cinquanta. È la guardia delle cache indicizzate per paragrafo: un errore di
-re-indicizzazione si manifesta come un paragrafo che dipinge il testo di un altro, e nessun
-cronometro lo vede. Ha trovato esattamente questo al primo passo, il giorno in cui è stato
-scritto — ma solo sul testo: il controllo geometrico è arrivato dopo, quando uno screenshot
-di un utente ha mostrato paragrafi dipinti uno sopra l'altro che il fuzz lasciava passare
-perché guardava solo *cosa* c'era scritto, mai *dove*.
+Il fuzz è la guardia delle cache indicizzate per paragrafo: un errore di re-indicizzazione si
+manifesta come un paragrafo che dipinge il testo di un altro, e nessun cronometro lo vede. Ha
+trovato esattamente questo al primo passo, il giorno in cui è stato scritto — ma solo sul
+testo. Il controllo geometrico è arrivato dopo, quando lo screenshot di un utente ha mostrato
+paragrafi dipinti uno sopra l'altro che il fuzz lasciava passare perché guardava solo *cosa*
+c'era scritto, mai *dove*.
+
+Il banco ha anche altri tre controlli, tutti nati da un difetto vero:
+
+- `checkHitTesting()` clicca dove ogni riga è dipinta — sulla riga e nel vuoto fra un
+  paragrafo e l'altro — e pretende che il cursore atterri lì, passando dalla stessa
+  conversione del mouse (`layout/coords.ts`). La Y del documento e quella visiva coincidono in
+  cima e divergono di PAGE_GAP a ogni pagina: uno scambio di unità è invisibile a pagina uno e
+  ti teletrasporta a pagina cinquanta.
+- `checkImageAnchors()` pretende che ogni immagine stia esattamente dove dice la sua ancora.
+  Una deriva significa che qualche strada ha riscritto una y assoluta, e la figura ha smesso
+  di seguire il suo testo.
+- `auditObstructionIndex()` confronta l'indice spaziale delle immagini con una scansione
+  completa, paragrafo per paragrafo. Un indice che perde un'immagine non lancia eccezioni: il
+  testo semplicemente smette di scorrerle attorno, che è la funzione per cui esiste questo
+  editor.
 
 ### Misure di riferimento (2026-08-21, 200 pagine richieste, 40 immagini, 8 schede)
 
@@ -132,3 +143,39 @@ cambia, e questo invalidava l'intero documento: **~500 ms a ogni a-capo** in un 
 290 pagine, mentre il banco riportava 1,2 ms e sembrava tutto a posto. L'ha scoperto un trace
 di un utente, non il test. Da qui la riga `structural` qui sopra: se una misura non tocca il
 percorso che l'utente sente, non sta misurando niente.
+
+---
+
+## 3. Misure a 2000 pagine (2026-08-22)
+
+Da un trace di un utente: 2579 pagine, 39.914 paragrafi, 7M caratteri, 400 immagini,
+90.055 righe, 264 MB.
+
+| | prima | dopo |
+| --- | --- | --- |
+| Costruzione del documento | 40 s solo di layout durante il caricamento immagini | **16,1 s** |
+| Passata a vuoto (niente di sporco) | 27–36 ms, con picchi di 3–5,8 s | **6,8–9,5 ms** |
+| Digitazione di un carattere | — | **6,6–10,4 ms** |
+| Invio, caso tipico | — | **30–108 ms** |
+| Invio, caso peggiore | 5,5 s | **1,2 s** |
+
+Tre cose l'hanno prodotto, tutte trovate leggendo il trace e non indovinando:
+
+1. **`obstructionKey` scandiva tutte le immagini per ogni paragrafo.** 39.904 × 400 = 16
+   milioni di confronti a passata, e la passata si ripeteva a ogni immagine che finiva di
+   caricare. Ora le immagini sono in secchi per pagina e la domanda costa una lookup.
+   `auditObstructionIndex()` confronta l'indice con la scansione completa: un indice che
+   perde un'immagine non lancia niente, smette solo di far scorrere il testo attorno.
+2. **Ogni immagine caricata rifaceva il layout.** 400 immagini, 400 impaginazioni complete.
+   Ora `scheduleRelayout` le raccoglie in una sola passata di fine frame.
+3. **Il numero di pagina invalidava la cache.** Quando una scheda si ripiega, tutto sotto
+   scala di una pagina intera e *ogni* paragrafo cambiava numero di pagina: 9.212 paragrafi
+   re-impaginati per un Invio. Ma la paginazione tocca un paragrafo solo attraverso la regola
+   "spingi la riga oltre il bordo", quindi conta *dove sta dentro la pagina*, non su quale
+   pagina sta. Uno spostamento di pagine intere lascia tutto identico.
+
+**Quel che resta**, ed è il prossimo passo vero: un Invio in cima costringe comunque a
+re-impaginare ogni paragrafo che *tocca* un bordo di pagina in tutto il documento — circa due
+per bordo, quindi ~4.800 a 2000 pagine, cioè il picco da 1,2 s. Non è eliminabile con un'altra
+cache: serve impaginare solo quello che sta vicino alla finestra, e stimare il resto. È un
+cambiamento architetturale (il layout diventa pigro), non un ritocco.

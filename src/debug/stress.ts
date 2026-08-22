@@ -13,7 +13,7 @@
 //    silhouettes all vary, because that is what a real document does.
 
 import { addImageFromDataURL, clearImages } from '../images/images'
-import { relayout } from '../layout/engine'
+import { auditObstructionIndex, relayout } from '../layout/engine'
 import { applyEdit, resetDocument } from '../model/document'
 import { markAllDirty } from '../model/dirty'
 import { newSectionId, setSectionMark } from '../model/sections'
@@ -113,6 +113,7 @@ export interface StressReport {
     overlappingParagraphs: number
     hitTestMisses: number
     imagesOffTheirAnchor: number
+    obstructionIndexMismatches: number
   }
   memoryMB?: number
 }
@@ -320,6 +321,7 @@ export async function runStressBenchmark(): Promise<StressReport> {
       overlappingParagraphs: overlappingParagraphs().length,
       hitTestMisses: checkHitTesting().length,
       imagesOffTheirAnchor: checkImageAnchors().length,
+      obstructionIndexMismatches: auditObstructionIndex().length,
     },
     memoryMB: (performance as any).memory
       ? Math.round((performance as any).memory.usedJSHeapSize / 1048576)

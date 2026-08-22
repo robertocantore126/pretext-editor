@@ -54,7 +54,17 @@ function indexAnchors(): void {
 function resolveAnchoredImages(paraIndex: number, yStart: number): void {
   const anchored = anchoredByPara.get(paraIndex)
   if (!anchored) return
-  for (const im of anchored) im.y = yStart + im.anchorDy
+  for (const im of anchored) {
+    const next = yStart + im.anchorDy
+    if (next === im.y) continue
+    im.y = next
+    // The bucket index must follow, or a paragraph below asks the wrong pages
+    // which images are near it.
+    if (im.loaded) {
+      removeFromBuckets(im)
+      addToBuckets(im)
+    }
+  }
 }
 
 /**
@@ -73,15 +83,77 @@ function shiftImageAnchors(at: number, removed: number, inserted: number): void 
 }
 
 /**
+ * Images bucketed by the pages they cover, so asking "what obstructs this
+ * paragraph?" costs a lookup instead of a scan of every image in the document.
+ *
+ * A user's trace made the difference impossible to ignore: 400 images and
+ * 39,904 paragraphs meant 16 million comparisons *per layout pass*, and the
+ * pass runs again on every image that finishes loading. Tens of seconds of the
+ * document's life went into asking 400 images whether they were anywhere near
+ * a paragraph they were nowhere near.
+ */
+const imageBuckets = new Map<number, FloatImage[]>()
+const bucketedRange = new WeakMap<FloatImage, [number, number]>()
+
+function bucketsOf(im: FloatImage): [number, number] {
+  return [Math.floor(im.y / PAGE_HEIGHT), Math.floor((im.y + im.h) / PAGE_HEIGHT)]
+}
+
+function addToBuckets(im: FloatImage): void {
+  const range = bucketsOf(im)
+  bucketedRange.set(im, range)
+  for (let p = range[0]; p <= range[1]; p++) {
+    const list = imageBuckets.get(p)
+    if (list) list.push(im)
+    else imageBuckets.set(p, [im])
+  }
+}
+
+function removeFromBuckets(im: FloatImage): void {
+  const range = bucketedRange.get(im)
+  if (!range) return
+  for (let p = range[0]; p <= range[1]; p++) {
+    const list = imageBuckets.get(p)
+    if (!list) continue
+    const at = list.indexOf(im)
+    if (at !== -1) list.splice(at, 1)
+  }
+  bucketedRange.delete(im)
+}
+
+function indexImages(): void {
+  imageBuckets.clear()
+  for (const im of view.images) {
+    if (im.loaded) addToBuckets(im)
+  }
+}
+
+/** Images that may overlap a band, without touching the ones that cannot. */
+function imagesNear(yStart: number, yEnd: number): FloatImage[] {
+  const first = Math.floor(yStart / PAGE_HEIGHT)
+  const last = Math.floor(yEnd / PAGE_HEIGHT)
+  if (first === last) return imageBuckets.get(first) ?? []
+  const out: FloatImage[] = []
+  for (let p = first; p <= last; p++) {
+    for (const im of imageBuckets.get(p) ?? []) {
+      if (!out.includes(im)) out.push(im)
+    }
+  }
+  return out
+}
+
+/**
  * The obstruction key of a paragraph: which images overlap its vertical band,
  * plus its page position (B5 makes height depend on page boundaries). Any
  * change means the paragraph must be re-fitted rather than translated.
  */
 function obstructionKey(paraIndex: number, yStart: number, estHeight: number): string {
-  const page = Math.floor(yStart / PAGE_HEIGHT)
-  const straddles = Math.floor((yStart + estHeight) / PAGE_HEIGHT) !== page
-  let key = page + (straddles ? ':s' : '')
-  for (const im of view.images) {
+  // No absolute page number here: a paragraph that moves down by whole pages is
+  // in the same place relative to the page it sits on, and its layout does not
+  // change. Only whether it straddles a boundary matters.
+  const straddles = Math.floor((yStart + estHeight) / PAGE_HEIGHT) !== Math.floor(yStart / PAGE_HEIGHT)
+  let key = straddles ? 's' : ''
+  for (const im of imagesNear(yStart, yStart + estHeight)) {
     if (!im.loaded) continue
     if (im.y < yStart + estHeight && im.y + im.h > yStart) {
       // Relative to the paragraph, not absolute: when a paragraph and the
@@ -91,6 +163,30 @@ function obstructionKey(paraIndex: number, yStart: number, estHeight: number): s
     }
   }
   return key
+}
+
+/**
+ * Differential check for the bucket index: for every paragraph band, the images
+ * the index offers must be exactly the images a full scan would find. An index
+ * that quietly misses one does not throw — the text simply stops flowing around
+ * that picture, which is the feature this editor exists for. Called by the
+ * stress harness (docs/DIAGNOSTICS.md), never on a hot path.
+ */
+export function auditObstructionIndex(): Array<{ yStart: number; missed: string[]; extra: string[] }> {
+  const problems: Array<{ yStart: number; missed: string[]; extra: string[] }> = []
+  for (const [index, entry] of Object.entries(paraCache)) {
+    void index
+    const yStart = entry.yStart
+    const yEnd = yStart + entry.height
+    const fromIndex = new Set(imagesNear(yStart, yEnd).filter((im) => im.loaded && im.y < yEnd && im.y + im.h > yStart).map((im) => im.id))
+    const fromScan = new Set(
+      view.images.filter((im) => im.loaded && im.y < yEnd && im.y + im.h > yStart).map((im) => im.id)
+    )
+    const missed = [...fromScan].filter((id) => !fromIndex.has(id))
+    const extra = [...fromIndex].filter((id) => !fromScan.has(id))
+    if (missed.length || extra.length) problems.push({ yStart, missed, extra })
+  }
+  return problems
 }
 
 /**
@@ -122,6 +218,7 @@ export function relayout() {
   // wholesale (import, restore) leaves the old ones dangling.
   for (const im of view.images) im.anchorPara = Math.max(0, Math.min(im.anchorPara, n - 1))
   indexAnchors()
+  indexImages()
   if (dirty === 'all') {
     // Index shifts (splits/merges/imports) invalidate every cache entry.
     for (const k of Object.keys(paraCache)) delete paraCache[+k]
@@ -129,6 +226,12 @@ export function relayout() {
 
   const lines: LineInfo[] = []
   const sectionsOut: SectionLayout[] = []
+  // Why a pass was expensive is not guessable from its duration: a re-fit runs
+  // the line breaker, a translate only moves numbers. Counting them separates
+  // "the document changed" from "the document moved" in the trace.
+  let refits = 0
+  const refitReasons: Record<string, number> = {}
+  let translations = 0
   let y = 0
   const dirtyFrom = dirty === 'all' ? 0 : dirty ? dirty.from : n
   const dirtyTo = dirty === 'all' ? n - 1 : dirty ? dirty.to : -1
@@ -200,6 +303,22 @@ export function relayout() {
 
     const version = styleVersion(i)
     const page = Math.floor(y / PAGE_HEIGHT)
+    // Pagination only affects a paragraph through B5's push-past-the-boundary
+    // rule, so what matters is where it sits *within* a page and whether it
+    // touches a boundary at all — not which page it is on. A whole-page shift
+    // leaves both identical.
+    //
+    // Testing the page number instead cost a full re-fit of the document every
+    // time a tab fold flipped to the next page: 9,212 paragraphs re-broken for
+    // an Enter, 1.6 s at 600 pages and 5.5 s at 2,000, measured from a user's
+    // trace. Nothing about those paragraphs had changed except their page number.
+    const shifted = cached ? y - cached.yStart : 0
+    const samePagePhase = cached ? shifted % PAGE_HEIGHT === 0 : false
+    const touchesBoundaryNow = Math.floor(y / PAGE_HEIGHT) !== Math.floor((y + (cached?.height ?? 0)) / PAGE_HEIGHT)
+    const touchedBoundaryBefore = cached
+      ? Math.floor(cached.yStart / PAGE_HEIGHT) !== Math.floor((cached.yStart + cached.height) / PAGE_HEIGHT)
+      : false
+    const paginationChanged = !samePagePhase && (touchesBoundaryNow || touchedBoundaryBefore)
     // The cached height is only a safe extent when the cached layout is still
     // the one we would reuse. If the text or styles changed, the paragraph is
     // about to be re-fitted anyway, so probe a band at least as tall as the old
@@ -213,14 +332,28 @@ export function relayout() {
       !cached ||
       cached.version !== version ||
       cached.docWidth !== docWidth ||
-      cached.page !== page ||
+      paginationChanged ||
       cached.obstructionKey !== key
 
     if (mustRefit) {
+      refits++
+      const reason = inDirty
+        ? 'dirty'
+        : !cached
+          ? 'uncached'
+          : cached.version !== version
+            ? 'version'
+            : cached.docWidth !== docWidth
+              ? 'width'
+              : paginationChanged
+                ? 'page'
+                : 'obstruction'
+      refitReasons[reason] = (refitReasons[reason] ?? 0) + 1
       const { lines: paraLines, height } = layoutParagraph(doc.paragraphs[i], docWidth, y, i)
       lines.push(...paraLines)
       paraCache[i] = { version, docWidth, yStart: y, page, obstructionKey: key, lines: paraLines, height }
     } else if (cached.yStart !== y) {
+      translations++
       // Position-independent: translate instead of re-fitting. The cached lines
       // move *in place*. Cloning them at the new y while leaving the entry's own
       // lines at the old one recorded a yStart that its lines did not agree
@@ -261,6 +394,9 @@ export function relayout() {
   trace('layout', 'relayout', {
     ms: Math.round((performance.now() - relayoutStart) * 100) / 100,
     dirty: dirty === 'all' ? 'all' : dirty ? `${dirty.from}-${dirty.to}` : 'none',
+    refits,
+    refitReasons,
+    translations,
     paragraphs: n,
     lines: lines.length,
     sections: sectionsOut.length,
