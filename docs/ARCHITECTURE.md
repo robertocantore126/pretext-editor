@@ -301,3 +301,32 @@ Conseguenze da tenere a mente:
   resta dov'è e il testo le scorre attorno passandoci sopra), è un flag per immagine che
   salta la risoluzione: è una scelta di prodotto, non un limite del modello.
 
+---
+
+## I due stati di un paragrafo (2026-08-22)
+
+Dopo `docs/LAZY-LAYOUT.md`, un paragrafo si trova in uno di due stati:
+
+- **materializzato** — ha righe vere in `paraCache` e un'altezza misurata. Sono i paragrafi
+  vicini alla finestra, più quelli nell'intervallo sporco dell'ultima modifica.
+- **stimato** — non ha righe, e la sua altezza viene da `estimateHeight()`. Occupa spazio
+  nell'indice delle altezze, quindi il documento ha una lunghezza e una barra di scorrimento,
+  ma nessuno ha ancora spezzato il suo testo.
+
+Da cui la regola che conta: **`view.lines` non è più tutto il documento.** Chi lo assumeva è
+stato corretto uno per uno, e chi lo assume da qui in avanti deve dichiararlo.
+
+| Chi | Cosa può assumere |
+| --- | --- |
+| `render/draw.ts` | solo il visibile — è sempre stato così |
+| `layout/caret-position.ts` | materializza il paragrafo che le serve prima di rispondere |
+| `layout/coords.ts` | la posizione di un paragrafo viene da `yOf()`, non da una scansione delle righe |
+| `io/html.ts`, `io/pdf.ts` | chiamano `materializeAll()`: un export è tutto il documento per definizione |
+| `edit/sections.ts` | `goToSection` materializza la scheda prima di scrollarci, o atterra vicino invece che dentro |
+| `debug/stress.ts` | i controlli guardano ciò che è materializzato, e il generatore materializza prima di piazzare le immagini |
+
+Tre strutture sono indicizzate per paragrafo — `paraCache`, `runCache` e le versioni di
+`model/dirty.ts` — e da adesso una quarta, l'albero delle altezze. Tutte devono seguire lo
+stesso splice quando i paragrafi si spostano: quella che se ne dimentica non lancia
+eccezioni, mostra il contenuto di un paragrafo sotto il nome di un altro.
+

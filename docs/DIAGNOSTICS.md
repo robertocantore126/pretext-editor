@@ -179,3 +179,41 @@ re-impaginare ogni paragrafo che *tocca* un bordo di pagina in tutto il document
 per bordo, quindi ~4.800 a 2000 pagine, cioè il picco da 1,2 s. Non è eliminabile con un'altra
 cache: serve impaginare solo quello che sta vicino alla finestra, e stimare il resto. È un
 cambiamento architetturale (il layout diventa pigro), non un ritocco.
+
+---
+
+## 4. Dopo il layout pigro (2026-08-22)
+
+`docs/LAZY-LAYOUT.md` implementato. Ora una passata impagina solo i paragrafi vicini alla
+finestra più l'intervallo sporco, stima gli altri, e corregge lo scroll quando una stima
+diventa una misura sopra il punto in cui stai guardando.
+
+Misurato qui, 306 pagine / 4.082 paragrafi / 40 immagini:
+
+| | prima | dopo |
+| --- | --- | --- |
+| Primo layout del documento | ~600 ms | **5,1 ms** |
+| Digitazione di un carattere | 1,3–1,6 ms | **0,8–1,5 ms** |
+| Invio / Backspace che unisce | 2,3–7,7 ms | **1,7–2,6 ms** |
+
+Riferito dall'agente che l'ha implementato, a 2000 pagine: Invio nel caso peggiore
+**19–30 ms** (era 1,2 s), passata a vuoto **2,5–4,3 ms**, `docHeight` esatta dopo la
+materializzazione completa.
+
+Quattro gate differenziali nuovi, tutti a zero nella verifica indipendente a 200 pagine:
+
+| Gate | Cosa confronta | Esito |
+| --- | --- | --- |
+| `compareReplaceAgainstRefit` | riposizionare contro rispezzare, stesso y | 485 controllati, 0 |
+| `checkHeightIndex` | l'albero di Fenwick contro la camminata completa | 4.089 controllati, 0 |
+| `compareLazyAgainstEager` | pigro contro eager a 350 posizioni di scroll | 40.800 controlli, 0 |
+| `checkScrollStability` | il testo sotto gli occhi non si muove | 0 fallimenti |
+
+**Il gate ha accusato il motore di una colpa del banco.** `compareLazyAgainstEager` riportava
+due righe disallineate di 1,5 px: il generatore piazzava le immagini a
+`view.docHeight * (i + 0.5) / n`, e sotto il layout pigro quell'altezza è *stimata* finché non
+si materializza tutto. Le due build ricevevano quindi documenti diversi — una sagoma diversa
+accanto allo stesso paragrafo, tre pixel di slot in meno, e su un paragrafo centrato metà di
+quei tre pixel finivano nella x. Il generatore ora materializza prima di piazzare le immagini:
+si possono confrontare due build solo se hanno ricevuto lo stesso documento.
+

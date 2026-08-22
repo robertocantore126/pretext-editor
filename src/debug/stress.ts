@@ -187,6 +187,15 @@ export async function generateStressDocument(options: StressOptions = {}): Promi
   relayout()
   const firstLayoutMs = Math.round((performance.now() - layoutStart) * 100) / 100
 
+  // Lay the whole document out before placing images. Their y is derived from
+  // view.docHeight, which under lazy layout is an *estimate* until everything is
+  // materialized — so an eager build and a lazy build would drop the images at
+  // different heights, land a different silhouette beside a given paragraph, and
+  // compareLazyAgainstEager would report a 1-3 px slot difference as a layout
+  // bug. The two builds have to receive the same document before they can be
+  // compared at all.
+  materializeAll()
+
   // Images spread down the whole roll, some near the margins so the wrap has to
   // work on both sides, all through the real entry point.
   for (let i = 0; i < imageCount; i++) {
